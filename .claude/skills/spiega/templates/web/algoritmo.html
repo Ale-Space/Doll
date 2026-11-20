@@ -1,0 +1,624 @@
+<!doctype html>
+<!--
+TEMPLATE WEB: algoritmi passo passo (solo canvas + HTML, nessuna libreria oltre KaTeX). Informatica,
+Algoritmi e programmazione, Fondamenti di informatica: "cosa fa il codice, riga per riga, sui dati".
+Esempio: bubble sort, insertion sort, ricerca binaria su un array di 8 interi e la ricorsione
+(fattoriale, Fibonacci) con lo stack delle chiamate e l'albero delle chiamate.
+
+COME E' FATTO (riusalo cosi'):
+- Ogni algoritmo e' una funzione traccia...() che ESEGUE l'algoritmo in JS e, a ogni passo
+  interessante, salva una FOTO completa dello stato (snap): array, ruoli dei bar (confronto,
+  scambio, ordinato...), puntatori, riga di codice C attiva, variabili, messaggio, contatori.
+  Il player mostra solo T[k]: Avanti/Indietro/Play sono banali e Indietro funziona sempre.
+- Il codice C mostrato e' compilabile; i numeri di riga nelle snap (campo line, numero o [da, a])
+  devono corrispondere alle righe di CODICE[algo] (1 = prima riga).
+- I bar hanno un'identita' (id): la posizione disegnata insegue quella della foto, quindi gli
+  scambi e gli spostamenti si vedono come movimenti fluidi, anche all'indietro.
+- verifica() all'avvio controlla le tracce su 200 array casuali (ordinato? indice giusto? 5! = 120?)
+  e scrive in console.error se qualcosa non torna: tienila quando adatti il template.
+- Guida (prevedi -> osserva -> spiega, guide/didattica.md): bubble, insertion, poi la DOMANDA "ricerca
+  binaria su 8 elementi: quante iterazioni?" (stato all'inizio della ricerca), il passo dopo la risposta
+  (fine della traccia: al massimo log2 8 + 1 = 4); ricorsione; l'ultimo passo "Prova tu" (Doll.bersaglio,
+  visibile solo li'): trovare n con cui fib fa 25 chiamate (risposta n = 6).
+
+Idee simili: selection sort (minimo corrente evidenziato), merge sort (sotto-array come livelli +
+array ausiliario), quick sort (pivot e partizione con i, j), counting sort; liste concatenate
+(nodi come box con frecce next, inserimento/cancellazione), pila e coda (push/pop, front/rear su
+array circolare), BFS/DFS su un grafo (nodi colorati per stato, coda/pila accanto), puntatori e
+memoria (celle con indirizzi, *p e &x), passaggio per valore vs per riferimento (due record
+sullo stack), complessita' O(n^2) vs O(n log n) (contatore confronti al variare di n),
+torre di Hanoi e backtracking (stack delle chiamate), programmazione dinamica (fib con memo).
+
+Regole: titolo breve, dati in .doll-dati, didascalie <= ~12 parole, Doll.guida per il percorso
+guidato (ogni passo = uno stato fotografato dal controllo), Doll.pronto() alla fine.
+Build:  .venv/bin/python .claude/skills/spiega/scripts/web_build.py pagina.html
+Check:  .venv/bin/python .claude/skills/spiega/scripts/web_check.py interattivo.html
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Algoritmi passo passo</title>
+<!-- doll:lib katex -->
+<style>
+  #vista { display: flex; }
+  #tela { flex: 1; min-width: 0; position: relative; }
+  #tela canvas { position: absolute; left: 0; top: 0; }
+  #codice { width: 440px; flex-shrink: 0; border-left: 1px solid var(--bordo); background: #fbfaf7;
+            padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  #codice .cod-titolo { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--tenue); }
+  #sorgente { margin: 0; font: 13px/1.65 "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; overflow-x: auto;
+              background: #fff; border: 1px solid var(--bordo); border-radius: 8px; padding: 8px 0; }
+  #sorgente .riga { display: flex; padding: 0 10px 0 4px; border-left: 3px solid transparent; white-space: pre; }
+  #sorgente .num { width: 2em; flex-shrink: 0; text-align: right; margin-right: 12px; color: #b5b3ab; user-select: none; }
+  #sorgente .riga.attiva { background: #fff1d9; border-left-color: var(--arancio); }
+  #sorgente .riga.attiva .num { color: var(--arancio); font-weight: 700; }
+  #sorgente .kw { color: var(--viola); font-weight: 600; }
+  #sorgente .ty { color: var(--blu); font-weight: 600; }
+  #sorgente .nu { color: var(--verde); }
+  #variabili { font: 13px/1.5 "SF Mono", Menlo, Consolas, monospace; background: #fff; border: 1px solid var(--bordo);
+               border-radius: 8px; padding: 6px 10px; min-height: 2.4em; white-space: pre-wrap; }
+  #variabili::before { content: "variabili  "; color: var(--tenue); font-family: -apple-system, Helvetica, Arial, sans-serif; font-size: 12px; }
+  #messaggio { font-size: 15px; padding: 8px 12px; border-left: 3px solid var(--blu); background: #fff; border-radius: 0 8px 8px 0; }
+  .doll-legenda i.q { width: 11px; height: 11px; border-radius: 2px; margin-left: 8px; }
+  .doll-legenda i.q:first-child { margin-left: 0; }
+  @media (max-width: 820px) {
+    #vista { flex-direction: column; min-height: 760px; }
+    #tela { min-height: 340px; }
+    #codice { width: auto; border-left: 0; border-top: 1px solid var(--bordo); }
+  }
+</style>
+</head>
+<body>
+<header class="doll-top">
+  <h1>Algoritmi passo passo</h1>
+  <div class="doll-dati" id="dati"></div>
+</header>
+<main class="doll-main">
+  <section class="doll-vista" id="vista">
+    <div id="tela"><div class="doll-legenda" id="legenda"></div></div>
+    <div id="codice">
+      <div class="cod-titolo" id="codTitolo">codice C</div>
+      <pre id="sorgente"></pre>
+      <div id="variabili"></div>
+      <div id="messaggio"></div>
+    </div>
+  </section>
+  <aside class="doll-pannello" id="pannello"></aside>
+</main>
+<footer class="doll-didascalia" id="didascalia"></footer>
+
+<script>
+const C = Doll.col;
+const N_ARRAY = 8, VMAX = 20;          // 8 interi distinti in 1..20 (scala fissa delle barre)
+const SEME0 = 7;                       // seme iniziale: stessi dati a ogni apertura (e per il controllo)
+
+// ---------------------------------------------------------------- codice C (righe numerate da 1)
+const CODICE = {
+  bubble: `void bubble_sort(int a[], int n) {
+    for (int i = 0; i < n - 1; i++) {
+        for (int j = 0; j < n - 1 - i; j++) {
+            if (a[j] > a[j + 1]) {
+                int t = a[j];
+                a[j] = a[j + 1];
+                a[j + 1] = t;
+            }
+        }
+    }
+}`,
+  insertion: `void insertion_sort(int a[], int n) {
+    for (int i = 1; i < n; i++) {
+        int key = a[i];
+        int j = i - 1;
+        while (j >= 0 && a[j] > key) {
+            a[j + 1] = a[j];
+            j--;
+        }
+        a[j + 1] = key;
+    }
+}`,
+  binaria: `int ricerca_binaria(int a[], int n, int x) {
+    int lo = 0, hi = n - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (a[mid] == x) return mid;
+        if (a[mid] < x) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return -1;
+}`,
+  fatt: `int fattoriale(int n) {
+    if (n <= 1) return 1;
+    return n * fattoriale(n - 1);
+}`,
+  fib: `int fib(int n) {
+    if (n <= 1) return n;
+    return fib(n - 1) + fib(n - 2);
+}`,
+};
+const INFO = {   // etichette dei contatori, complessita', file
+  bubble:    { c1: "confronti", c2: "scambi",       O: "$O(n^2)$",                file: "bubble_sort.c" },
+  insertion: { c1: "confronti", c2: "spostamenti",  O: "$O(n^2)$, $O(n)$ se ordinato", file: "insertion_sort.c" },
+  binaria:   { c1: "confronti", c2: "iterazioni",   O: "$O(\\log_2 n)$",          file: "ricerca_binaria.c" },
+  fatt:      { c1: "chiamate",  c2: "profondità stack", O: "$n$ chiamate",        file: "fattoriale.c" },
+  fib:       { c1: "chiamate",  c2: "profondità stack", O: "$\\approx\\varphi^n$ chiamate", file: "fib.c" },
+};
+
+// ---------------------------------------------------------------- dati deterministici (seme)
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function nuoviDati(seme) {
+  const r = mulberry32(seme), pool = Array.from({ length: VMAX }, (_, k) => k + 1);
+  for (let k = pool.length - 1; k > 0; k--) { const m = Math.floor(r() * (k + 1)); [pool[k], pool[m]] = [pool[m], pool[k]]; }
+  const vals = pool.slice(0, N_ARRAY);                    // vals[id] = valore dell'elemento id
+  // obiettivo della ricerca binaria: di solito presente (servono >= 3 confronti), a volte assente
+  const ord = [...vals].sort((p, q) => p - q);
+  let x;
+  if (seme === SEME0 || r() < 0.75) x = ord[[0, 2, 4, 6, 7][Math.floor(r() * 5)]];
+  else { const assenti = pool.slice(N_ARRAY).filter(v => v > ord[0] && v < ord[N_ARRAY - 1]); x = assenti[Math.floor(r() * assenti.length)] ?? ord[0] - 1; }
+  return { vals, x };
+}
+
+// ---------------------------------------------------------------- tracce (array di foto)
+// Una foto di un algoritmo su array:
+//   { ids:[id|null per indice], vals, ruoli:{indice:ruolo}, ord:[indici ordinati], ptr:[{nome,at,col}],
+//     key:{id,at}|null, lo, hi, x, line, msg, vars, c1, c2, meta }
+function tracciaBubble(vals) {
+  const ids = vals.map((_, k) => k), n = ids.length, T = [], ord = new Set();
+  let conf = 0, sc = 0;
+  const v = k => vals[ids[k]];
+  const snap = (line, msg, extra = {}) => T.push({ ids: [...ids], vals, ruoli: {}, ord: [...ord], ptr: [], line, msg,
+    vars: "", c1: conf, c2: sc, meta: {}, ...extra });
+  snap(1, `Array di n = ${n} elementi da ordinare.`, { vars: `n = ${n}` });
+  for (let i = 0; i < n - 1; i++) {
+    snap(2, `Passata i = ${i}: il massimo rimasto salirà in fondo.`, { vars: `n = ${n}   i = ${i}` });
+    for (let j = 0; j < n - 1 - i; j++) {
+      conf++;
+      const sw = v(j) > v(j + 1);
+      const base = { vars: `i = ${i}   j = ${j}   a[j] = ${v(j)}   a[j+1] = ${v(j + 1)}`,
+        ptr: [{ nome: "j", at: j, col: C.arancio }, { nome: "j+1", at: j + 1, col: C.arancio }] };
+      snap(4, `${v(j)} > ${v(j + 1)} ? ${sw ? "<b>sì</b>: vanno scambiati" : "no: restano dove sono"}`,
+        { ...base, ruoli: { [j]: "cmp", [j + 1]: "cmp" }, meta: { tipo: "cmp", i } });
+      if (sw) {
+        [ids[j], ids[j + 1]] = [ids[j + 1], ids[j]]; sc++;
+        snap([5, 7], `Scambio con la variabile t: ora a[j] = ${v(j)}, a[j+1] = ${v(j + 1)}.`,
+          { ...base, vars: `i = ${i}   j = ${j}   t = ${v(j + 1)}`, ruoli: { [j]: "swap", [j + 1]: "swap" }, meta: { tipo: "swap", i } });
+      }
+    }
+    ord.add(n - 1 - i);
+  }
+  ord.add(0);
+  snap(11, `Ordinato con ${conf} confronti e ${sc} scambi.`, { vars: `n = ${n}`, meta: { tipo: "fine" } });
+  return T;
+}
+
+function tracciaInsertion(vals) {
+  const ids = vals.map((_, k) => k), n = ids.length, T = [];
+  let conf = 0, sp = 0, key = null, hole = null, iCur = 0;
+  const v = k => vals[ids[k]];
+  const snap = (line, msg, extra = {}) => T.push({ ids: [...ids], vals, ruoli: {},
+    ord: Array.from({ length: iCur }, (_, k) => k).filter(k => ids[k] !== null), ptr: [],
+    key: key === null ? null : { id: key, at: hole }, line, msg, vars: "", c1: conf, c2: sp, meta: {}, ...extra });
+  snap(1, `Array di n = ${n} elementi: a[0] da solo è già ordinato.`, { vars: `n = ${n}` });
+  iCur = 1;
+  for (let i = 1; i < n; i++) {
+    key = ids[i]; hole = i; ids[i] = null;
+    const kv = vals[key], pI = { nome: "i", at: i, col: C.blu };
+    snap([2, 3], `Estraggo key = a[${i}] = ${kv}: lascia un buco.`, { vars: `i = ${i}   key = ${kv}`, ptr: [pI], meta: { tipo: "key", i } });
+    let j = i - 1;
+    snap(4, `j = i − 1 = ${j}: confronto key con gli elementi a sinistra.`, { vars: `i = ${i}   j = ${j}   key = ${kv}`,
+      ptr: [pI, { nome: "j", at: j, col: C.arancio }] });
+    while (true) {
+      if (j < 0) {   // corto circuito: a[j] non viene neanche letto
+        snap(5, `j = −1: condizione falsa, a[j] non viene letto (&&).`, { vars: `i = ${i}   j = -1   key = ${kv}`, ptr: [pI], meta: { tipo: "fuori", i } });
+        break;
+      }
+      conf++;
+      const gt = v(j) > kv;
+      snap(5, `a[${j}] = ${v(j)} > key = ${kv} ? ${gt ? "<b>sì</b>: lo sposto a destra" : "no: il posto è j + 1"}`,
+        { vars: `i = ${i}   j = ${j}   key = ${kv}`, ruoli: { [j]: "cmp" }, ptr: [pI, { nome: "j", at: j, col: C.arancio }], meta: { tipo: "cmp", i } });
+      if (!gt) break;
+      ids[j + 1] = ids[j]; ids[j] = null; hole = j; sp++; j--;
+      snap([6, 7], `a[${j + 2}] = a[${j + 1}]: ${v(j + 2)} scorre a destra, il buco va a sinistra.`,
+        { vars: `i = ${i}   j = ${j}   key = ${kv}`, ruoli: { [j + 2]: "swap" },
+          ptr: [pI].concat(j >= 0 ? [{ nome: "j", at: j, col: C.arancio }] : []), meta: { tipo: "shift", i } });
+    }
+    ids[j + 1] = key; key = null; hole = null; iCur = i + 1;
+    snap(9, `a[${j + 1}] = key = ${kv}: a[0..${i}] ora è ordinato.`, { vars: `i = ${i}   j = ${j}`, ruoli: { [j + 1]: "messo" },
+      ptr: [pI], meta: { tipo: "messo", i } });
+  }
+  snap(11, `Ordinato con ${conf} confronti e ${sp} spostamenti.`, { vars: `n = ${n}`, meta: { tipo: "fine" } });
+  return T;
+}
+
+function tracciaBinaria(vals, x) {
+  const ids = vals.map((_, k) => k).sort((p, q) => vals[p] - vals[q]), n = ids.length, T = [];
+  let conf = 0, it = 0, lo = 0, hi = n - 1, mid = null, res = -1;
+  const v = k => vals[ids[k]];
+  const P = () => [{ nome: "lo", at: lo, col: C.blu }, { nome: "hi", at: hi, col: C.blu }]
+    .concat(mid !== null ? [{ nome: "mid", at: mid, col: C.arancio }] : []).filter(p => p.at >= 0 && p.at < n);
+  const snap = (line, msg, extra = {}) => T.push({ ids: [...ids], vals, ruoli: {}, ord: [], ptr: P(), lo, hi, x, line, msg,
+    vars: `lo = ${lo}   hi = ${hi}` + (mid !== null ? `   mid = ${mid}` : ""), c1: conf, c2: it, meta: {}, ...extra });
+  snap(1, `Cerco x = ${x} nell'array ordinato.`, { ptr: [], lo: null, hi: null, vars: `n = ${n}   x = ${x}` });
+  snap(2, `Intervallo di ricerca: tutto l'array, [${lo}, ${hi}].`);
+  while (true) {
+    if (lo > hi) { snap(3, `lo = ${lo} > hi = ${hi}: intervallo vuoto, esco dal ciclo.`, { meta: { tipo: "vuoto" } }); break; }
+    it++;
+    snap(3, `lo ≤ hi (${lo} ≤ ${hi}): c'è ancora qualcosa da guardare.`);
+    mid = lo + Math.floor((hi - lo) / 2);
+    snap(4, `mid = ${lo} + (${hi} − ${lo}) / 2 = ${mid}  (divisione intera)`, { ruoli: { [mid]: "cmp" }, meta: { tipo: "mid", it } });
+    conf++;
+    if (v(mid) === x) { res = mid; snap(5, `a[${mid}] = ${v(mid)} == ${x}: <b>trovato</b>, return ${mid}.`, { ruoli: { [mid]: "trovato" }, meta: { tipo: "fine" }, res }); return T; }
+    snap(5, `a[${mid}] = ${v(mid)} == ${x} ? no.`, { ruoli: { [mid]: "cmp" } });
+    conf++;
+    if (v(mid) < x) { lo = mid + 1; snap(6, `${v(mid)} < ${x}: x è a destra, lo = mid + 1 = ${lo}.`, { ruoli: { [mid]: "cmp" } }); }
+    else {
+      snap(6, `${v(mid)} < ${x} ? no: x è a sinistra.`, { ruoli: { [mid]: "cmp" } });
+      hi = mid - 1; snap(7, `hi = mid − 1 = ${hi}: scarto la metà destra.`, { ruoli: { [mid]: "cmp" } });
+    }
+    mid = null;
+  }
+  snap(9, `x = ${x} non c'è: return −1 dopo ${conf} confronti.`, { meta: { tipo: "fine" }, res: -1 });
+  return T;
+}
+
+// Ricorsione: l'albero delle chiamate e' costruito prima (ordine di chiamata = preordine),
+// poi la ricorsione "vera" scatta le foto. Foto: { ric:true, nodi:[{s,v}], stack:[frame], ... }
+function tracciaRicorsione(tipo, N) {
+  const nome = tipo === "fatt" ? "fattoriale" : "fib";
+  const nodi = [];
+  (function costruisci(n, d, p) {
+    const id = nodi.length; nodi.push({ n, d, p, figli: [] });
+    if (n > 1) for (const m of tipo === "fatt" ? [n - 1] : [n - 1, n - 2]) nodi[id].figli.push(costruisci(m, d + 1, id));
+    return id;
+  })(N, 0, -1);
+  let foglie = 0;                                   // layout: foglie in fila, padri al centro dei figli
+  (function posa(id) { const nd = nodi[id]; if (!nd.figli.length) nd.x = foglie++; else { nd.figli.forEach(posa);
+    nd.x = nd.figli.reduce((s, f) => s + nodi[f].x, 0) / nd.figli.length; } })(0);
+  const geo = { nodi, foglie, prof: Math.max(...nodi.map(nd => nd.d)) + 1 };
+
+  const stato = nodi.map(() => ({ s: "futuro", v: null })), stack = [], T = [];
+  let chiamate = 0;
+  const main = { main: true, testo: "main", expr: `r = ${nome}(${N})` };
+  const snap = (line, msg) => T.push({ ric: true, tipo, geo, line, msg, nodi: stato.map(s => ({ ...s })),
+    stack: [main, ...stack].map(f => ({ ...f })), c1: chiamate, c2: stack.length,
+    vars: stack.length ? `n = ${stack[stack.length - 1].n}   (record attivi: ${stack.length})` : `r = ${main.expr.slice(4)}`, meta: { fatti: stato.filter(s => s.s === "fatto").length } });
+
+  snap(null, `main chiama ${nome}(${N}).`);
+  function esegui(id) {
+    const n = nodi[id].n; chiamate++;
+    const fr = { id, n, testo: `${nome}(${n})`, expr: `n = ${n}` };
+    stack.push(fr); stato[id].s = "attivo";
+    snap(1, `Chiamata ${nome}(${n}): nuovo record sullo stack.`);
+    let r;
+    if (n <= 1) {
+      r = tipo === "fatt" ? 1 : n;
+      fr.expr = `return ${r}`; fr.ritorna = true; stato[id] = { s: "fatto", v: r };
+      snap(2, `Caso base n = ${n} ≤ 1: return ${r}, il record si chiude.`);
+    } else {
+      snap(2, `n = ${n} > 1: non è il caso base.`);
+      if (tipo === "fatt") {
+        fr.expr = `${n} * fattoriale(${n - 1})`;
+        snap(3, `Serve fattoriale(${n - 1}): questa chiamata aspetta.`);
+        const a = esegui(nodi[id].figli[0]); r = n * a;
+        fr.expr = `${n} * ${a} = ${r}`; fr.ritorna = true; stato[id] = { s: "fatto", v: r };
+        snap(3, `È tornato ${a}: return ${n} · ${a} = ${r}.`);
+      } else {
+        fr.expr = `fib(${n - 1}) + fib(${n - 2})`;
+        snap(3, `Prima chiama fib(${n - 1}), fib(${n - 2}) aspetta.`);
+        const a = esegui(nodi[id].figli[0]);
+        fr.expr = `${a} + fib(${n - 2})`;
+        snap(3, `fib(${n - 1}) = ${a}; ora chiama fib(${n - 2}).`);
+        const b = esegui(nodi[id].figli[1]); r = a + b;
+        fr.expr = `${a} + ${b} = ${r}`; fr.ritorna = true; stato[id] = { s: "fatto", v: r };
+        snap(3, `return ${a} + ${b} = ${r}.`);
+      }
+    }
+    stack.pop();
+    return r;
+  }
+  const r = esegui(0);
+  main.expr = `r = ${r}`;
+  const ripetute = tipo === "fib" && N >= 4 ? ` fib(2) calcolato ${nodi.filter(nd => nd.n === 2).length} volte.` : "";
+  snap(null, `${nome}(${N}) = ${r} con ${chiamate} chiamate.${ripetute}`);
+  T[T.length - 1].res = r;
+  return T;
+}
+
+// ---------------------------------------------------------------- verifica automatica delle tracce
+function verifica() {
+  const err = [];
+  for (let s = 1; s <= 200; s++) {
+    const { vals, x } = nuoviDati(s), giusto = [...vals].sort((p, q) => p - q).join();
+    for (const [nm, f] of [["bubble", tracciaBubble], ["insertion", tracciaInsertion]]) {
+      const ult = f(vals).at(-1);
+      if (ult.ids.map(id => vals[id]).join() !== giusto) err.push(`${nm} seme ${s}`);
+    }
+    const ord = [...vals].sort((p, q) => p - q);
+    for (const xx of [x, ...ord, 0, 21]) {
+      const r = tracciaBinaria(vals, xx).at(-1).res;
+      if (r !== ord.indexOf(xx)) err.push(`binaria seme ${s} x ${xx}: ${r}`);
+    }
+  }
+  const fibI = n => { let a = 0, b = 1; for (let k = 0; k < n; k++) [a, b] = [b, a + b]; return a; };
+  for (let n = 1; n <= 8; n++) if (tracciaRicorsione("fatt", n).at(-1).res !== [1, 1, 2, 6, 24, 120, 720, 5040, 40320][n]) err.push(`fatt ${n}`);
+  for (let n = 1; n <= 6; n++) if (tracciaRicorsione("fib", n).at(-1).res !== fibI(n)) err.push(`fib ${n}`);
+  if (tracciaRicorsione("fatt", 5).at(-1).res !== 120 || tracciaRicorsione("fib", 5).at(-1).res !== 5) err.push("5! o fib(5)");
+  if (err.length) console.error("Tracce sbagliate:", err.slice(0, 10).join("; "));
+}
+verifica();
+
+// ---------------------------------------------------------------- stato del player
+let seme = SEME0, algo = "bubble", T = [], k = 0, dati = nuoviDati(seme);
+
+// ---------------------------------------------------------------- tela (canvas che segue il suo contenitore)
+const tela = document.getElementById("tela");
+const cv = document.createElement("canvas"); tela.prepend(cv);
+const ctx = cv.getContext("2d");
+let W = 0, H = 0;
+function adatta() {
+  const dpr = window.devicePixelRatio || 1; W = tela.clientWidth; H = tela.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + "px"; cv.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); richiedi();
+}
+new ResizeObserver(adatta).observe(tela);
+
+// posizioni disegnate dei bar (inseguono quelle della foto: movimento fluido avanti e indietro)
+let posX = {};
+let rafId = null, ultimoTs = null;
+function richiedi() { if (rafId === null) { ultimoTs = null; rafId = requestAnimationFrame(tick); } }
+function tick(ts) {
+  rafId = null;
+  const dt = ultimoTs === null ? 1 / 60 : Math.min((ts - ultimoTs) / 1000, 0.05); ultimoTs = ts;
+  let muove = false;
+  const s = T[k];
+  if (s && !s.ric) {
+    const a = 1 - Math.exp(-dt * 16);
+    for (const [id, x] of Object.entries(bersagli(s))) {
+      if (posX[id] === undefined) posX[id] = x;
+      posX[id] += (x - posX[id]) * a;
+      if (Math.abs(x - posX[id]) > 0.002) muove = true; else posX[id] = x;
+    }
+  }
+  disegna();
+  if (muove) { rafId = requestAnimationFrame(tick); }
+}
+function bersagli(s) {   // id -> indice (anche frazionario durante il moto)
+  const b = {}; s.ids.forEach((id, i) => { if (id !== null) b[id] = i; });
+  if (s.key) b[s.key.id] = s.key.at;
+  return b;
+}
+
+// ---------------------------------------------------------------- disegno
+const RUOLO = { cmp: C.arancio, swap: C.rosso, ord: C.verde, trovato: C.verde, messo: C.viola };
+const BASE = "#a7bfdd", FUORI = "#e6e4de";
+function rrect(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
+function testo(t, x, y, { font = "14px", col = C.testo, al = "center", bl = "alphabetic", peso = "" } = {}) {
+  ctx.font = `${peso} ${font} -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif`;
+  ctx.fillStyle = col; ctx.textAlign = al; ctx.textBaseline = bl; ctx.fillText(t, x, y);
+}
+function disegna() {
+  ctx.clearRect(0, 0, W, H);
+  const s = T[k]; if (!s) return;
+  if (s.ric) disegnaRicorsione(s); else disegnaArray(s);
+}
+
+function disegnaArray(s) {
+  const n = s.ids.length, pad = 26;
+  const top = 56 + (algo === "insertion" ? 52 : 0) + 22;     // legenda (+ fascia della key) + etichetta valore
+  const base = H - 84;                                       // linea di base; sotto: indici + puntatori
+  const slot = (W - 2 * pad) / n, bw = Math.min(46, slot * 0.72), hMax = Math.max(40, base - top);
+  const cx = i => pad + (i + 0.5) * slot, alt = v => v / VMAX * hMax;
+  const ord = new Set(s.ord);
+  const fuori = i => s.lo !== undefined && s.lo !== null && (i < s.lo || i > s.hi);
+
+  // linea dell'obiettivo x (ricerca binaria)
+  if (s.x !== undefined) {
+    const y = base - alt(s.x);
+    ctx.save(); ctx.setLineDash([6, 5]); ctx.strokeStyle = C.viola; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(pad - 10, y); ctx.lineTo(W - pad + 4, y); ctx.stroke(); ctx.restore();
+  }
+  // asse di base
+  ctx.strokeStyle = "#c9c6bc"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pad - 10, base + 0.5); ctx.lineTo(W - pad + 10, base + 0.5); ctx.stroke();
+
+  // buco + key sollevata (insertion sort)
+  if (s.key) {
+    const x = cx(posX[s.key.id] ?? s.key.at), v = s.vals[s.key.id], h = alt(v);
+    ctx.save(); ctx.setLineDash([5, 4]); ctx.strokeStyle = C.viola; ctx.lineWidth = 1.5;
+    rrect(cx(s.key.at) - bw / 2, base - h, bw, h, 4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, 56 + 34); ctx.lineTo(x, base - h - 4); ctx.globalAlpha = .5; ctx.stroke(); ctx.restore();
+    rrect(x - 38, 56, 76, 32, 8); ctx.fillStyle = C.viola; ctx.fill();
+    testo(`key = ${v}`, x, 72, { font: "14px", col: "#fff", bl: "middle", peso: "600" });
+  }
+  // barre
+  s.ids.forEach((id, i) => {
+    if (id === null) return;
+    const v = s.vals[id], x = cx(posX[id] ?? i), h = alt(v);
+    const ruolo = s.ruoli[i] || (ord.has(i) ? "ord" : null);
+    const colore = fuori(i) && !s.ruoli[i] ? FUORI : (RUOLO[ruolo] || BASE);
+    rrect(x - bw / 2, base - h, bw, h, 4); ctx.fillStyle = colore; ctx.fill();
+    if (ruolo === "trovato") { ctx.strokeStyle = C.testo; ctx.lineWidth = 2; ctx.stroke(); }
+    testo(String(v), x, base - h - 6, { font: "15px", peso: "650", col: fuori(i) && !s.ruoli[i] ? "#b3b0a8" : C.testo });
+  });
+  // etichetta dell'obiettivo x, sopra le barre (con fondo bianco)
+  if (s.x !== undefined) {
+    const y = base - alt(s.x); ctx.font = "600 13px -apple-system, Helvetica, Arial, sans-serif";
+    const t = `x = ${s.x}`, tw = ctx.measureText(t).width + 10;
+    rrect(pad - 10, y - 20, tw, 18, 4); ctx.fillStyle = "rgba(255,255,255,.92)"; ctx.fill();
+    testo(t, pad - 5, y - 6, { font: "13px", col: C.viola, al: "left", peso: "600" });
+  }
+  // indici e puntatori: i nomi sullo stesso indice si affiancano ("lo, mid, hi")
+  for (let i = 0; i < n; i++) testo(String(i), cx(i), base + 17, { font: "12px", col: C.grigio });
+  const gruppi = {};
+  for (const p of s.ptr) (gruppi[p.at] = gruppi[p.at] || []).push(p);
+  for (const [at, ps] of Object.entries(gruppi)) {
+    const x = cx(+at), y = base + 28;
+    ctx.fillStyle = ps[ps.length - 1].col; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - 6, y + 8); ctx.lineTo(x + 6, y + 8); ctx.fill();
+    ctx.font = "700 14px -apple-system, Helvetica, Arial, sans-serif";
+    const parti = ps.map((p, q) => [p.nome + (q < ps.length - 1 ? "," : ""), p.col]);
+    const larg = parti.map(([t]) => ctx.measureText(t).width + 4);
+    let xx = x - larg.reduce((a, b) => a + b, 0) / 2 + 2;
+    parti.forEach(([t, c], q) => { testo(t, xx, y + 23, { font: "14px", col: c, al: "left", peso: "700" }); xx += larg[q]; });
+  }
+}
+
+function disegnaRicorsione(s) {
+  const { nodi, foglie, prof } = s.geo, pad = 28;
+  const top = 60, treeB = Math.max(top + 120, H * 0.5);
+  const dy = (treeB - top) / prof, sx = (W - 2 * pad) / foglie;
+  const r = Math.max(9, Math.min(17, dy * 0.34, sx * 0.36));
+  const compatto = sx < 2 * r + 30;          // poco spazio: il valore va dentro il cerchio
+  const P = nd => [pad + (nd.x + 0.5) * sx, top + (nd.d + 0.5) * dy];
+  const cima = s.stack.length > 1 ? s.stack[s.stack.length - 1].id : -1;
+  // archi
+  nodi.forEach((nd, id) => { if (nd.p < 0) return;
+    const [x1, y1] = P(nodi[nd.p]), [x2, y2] = P(nd), vista = s.nodi[id].s !== "futuro";
+    ctx.save(); if (!vista) ctx.setLineDash([3, 4]);
+    ctx.strokeStyle = vista ? "#8d8a82" : "#d6d3ca"; ctx.lineWidth = vista ? 1.6 : 1;
+    ctx.beginPath(); ctx.moveTo(x1, y1 + r); ctx.lineTo(x2, y2 - r); ctx.stroke(); ctx.restore(); });
+  // nodi
+  nodi.forEach((nd, id) => {
+    const [x, y] = P(nd), st = s.nodi[id];
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI);
+    if (st.s === "futuro") { ctx.save(); ctx.setLineDash([3, 3]); ctx.fillStyle = "#fff"; ctx.fill(); ctx.strokeStyle = "#cfccc2"; ctx.stroke(); ctx.restore(); }
+    else if (st.s === "fatto") { ctx.fillStyle = "#e3f3e9"; ctx.fill(); ctx.strokeStyle = C.verde; ctx.lineWidth = 2; ctx.stroke(); }
+    else { ctx.fillStyle = id === cima ? C.arancio : "#fdebd9"; ctx.fill(); ctx.strokeStyle = C.arancio; ctx.lineWidth = 2; ctx.stroke(); }
+    const fs = Math.round(Math.min(14, r * 0.95)) + "px";
+    const col = st.s === "futuro" ? "#b5b2a9" : id === cima && st.s !== "fatto" ? "#fff" : C.testo;
+    if (st.s === "fatto" && compatto) testo(String(st.v), x, y + 1, { font: fs, col: C.verde, bl: "middle", peso: "700" });
+    else testo(String(nd.n), x, y + 1, { font: fs, col, bl: "middle", peso: "600" });
+    if (st.s === "fatto" && !compatto) testo(`=${st.v}`, x + r + 3, y - r + 4, { font: "13px", col: C.verde, al: "left", peso: "700" });
+  });
+  // stack delle chiamate (cresce verso l'alto)
+  const bw = Math.min(380, W - 2 * pad), bx = (W - bw) / 2, bottom = H - 16;
+  const fh = Math.min(36, (bottom - treeB - 34) / (prof + 1)), gap = Math.min(5, fh * 0.15);
+  const yTit = bottom - (prof + 1) * fh - 10;
+  testo("STACK DELLE CHIAMATE", bx, yTit, { font: "12px", col: C.grigio, al: "left", peso: "600" });
+  testo(s.tipo === "fatt" ? "cerchio n = fattoriale(n)" : "cerchio n = fib(n)", bx + bw, yTit, { font: "12px", col: C.grigio, al: "right" });
+  s.stack.forEach((f, q) => {
+    const y = bottom - (q + 1) * fh, cimaF = q === s.stack.length - 1 && !f.main;
+    rrect(bx, y + gap / 2, bw, fh - gap, 6);
+    ctx.fillStyle = f.main ? "#f1f0ec" : f.ritorna ? "#e9f6ee" : cimaF ? "#fff1e2" : "#fff"; ctx.fill();
+    ctx.strokeStyle = f.ritorna ? C.verde : cimaF ? C.arancio : "#cfccc2"; ctx.lineWidth = cimaF || f.ritorna ? 2 : 1; ctx.stroke();
+    const fs = Math.round(Math.min(14, fh * 0.45)) + "px", ym = y + fh / 2 + 1;
+    testo(f.testo, bx + 12, ym, { font: fs, al: "left", bl: "middle", peso: "650", col: f.main ? C.grigio : C.testo });
+    testo(f.expr, bx + bw - 12, ym, { font: fs, al: "right", bl: "middle", col: f.ritorna ? C.verde : C.testo, peso: f.ritorna ? "650" : "" });
+  });
+}
+
+// ---------------------------------------------------------------- pannello del codice
+const sorgente = document.getElementById("sorgente");
+function evidenziaC(riga) {   // colori minimi: parole chiave, tipi, numeri
+  const esc = riga.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return esc.replace(/\b(for|while|if|else|return)\b/g, '<span class="kw">$1</span>')
+            .replace(/\b(int|void)\b/g, '<span class="ty">$1</span>')
+            .replace(/\b(\d+)\b/g, '<span class="nu">$1</span>');
+}
+function mostraCodice() {
+  sorgente.innerHTML = CODICE[algo].split("\n").map((r, q) =>
+    `<div class="riga" data-l="${q + 1}"><span class="num">${q + 1}</span><span>${evidenziaC(r)}</span></div>`).join("");
+  document.getElementById("codTitolo").textContent = INFO[algo].file;
+}
+
+// ---------------------------------------------------------------- pannello dei controlli
+// lettura con etichetta modificabile (Doll.lettura fissa l'etichetta alla creazione)
+function letturaVar(etichetta) {
+  const set = Doll.lettura(null, etichetta), riga = document.getElementById("pannello").lastElementChild;
+  return { set, et: t => { riga.firstChild.innerHTML = t; Doll.tex(riga.firstChild); } };
+}
+Doll.titoletto(null, "Algoritmo");
+const sAlgo = Doll.scelta(null, { label: "", value: "bubble", opzioni: [["bubble", "Bubble sort"], ["insertion", "Insertion sort"],
+  ["binaria", "Ricerca binaria"], ["fatt", "Ricorsione: fattoriale"], ["fib", "Ricorsione: Fibonacci"]],
+  onChange: v => { algo = v; costruisci(); } });
+const sN = Doll.slider(null, { label: "$n$ della chiamata", min: 1, max: 8, step: 1, value: 5, onInput: () => costruisci() });
+const bNuovo = Doll.bottone(null, "🎲 Nuovo array", () => { seme++; dati = nuoviDati(seme); costruisci(); });
+Doll.titoletto(null, "Esecuzione");
+Doll.bottone(null, "← Indietro", () => { anim.pausa(); vai(k - 1); });
+let acc = 0;
+const anim = Doll.animazione(dt => {            // Play: avanza di "velocita'" passi al secondo
+  acc += dt * sVel.value();
+  while (acc >= 1) { acc -= 1; if (k < T.length - 1) vai(k + 1); else { anim.pausa(); break; } }
+});
+const bPlay = document.querySelector("#pannello button.doll-btn.primario");
+bPlay.addEventListener("click", () => { if (anim.attiva && k >= T.length - 1) vai(0); acc = 0; });   // Play alla fine: riparte
+Doll.bottone(null, "Avanti →", () => { anim.pausa(); vai(k + 1); });
+bPlay.parentElement.querySelectorAll("button").forEach(b => (b.style.padding = "7px 10px"));   // i tre bottoni in una riga
+const sVel = Doll.slider(null, { label: "velocità", min: 0.5, max: 8, step: 0.5, value: 2, fmt: v => `${v} passi/s` });
+Doll.titoletto(null, "Letture");
+const lPasso = letturaVar("passo");
+const l1 = letturaVar("confronti"), l2 = letturaVar("scambi"), lO = letturaVar("complessità");
+const nota = document.createElement("p"); nota.className = "doll-nota";
+nota.textContent = "Frecce ← → della tastiera: passo indietro / avanti.";
+document.getElementById("pannello").appendChild(nota);
+document.addEventListener("keydown", e => {
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName)) return;
+  if (e.key === "ArrowRight") { anim.pausa(); vai(k + 1); } else if (e.key === "ArrowLeft") { anim.pausa(); vai(k - 1); }
+});
+
+const LEGENDE = {
+  bubble: [[RUOLO.cmp, "confronto"], [RUOLO.swap, "scambio"], [RUOLO.ord, "al posto finale"]],
+  insertion: [[RUOLO.cmp, "confronto"], [RUOLO.swap, "spostato"], [C.viola, "key"], [RUOLO.ord, "parte ordinata"]],
+  binaria: [[RUOLO.cmp, "a[mid]"], [FUORI, "scartato"], [RUOLO.trovato, "trovato"]],
+  ric: [[C.arancio, "sullo stack"], [C.verde, "ha restituito"], ["#fff", "da chiamare"]],
+};
+
+// ---------------------------------------------------------------- costruzione traccia e player
+function costruisci() {
+  const ric = algo === "fatt" || algo === "fib";
+  sN.el.parentElement.style.display = ric ? "" : "none";
+  bNuovo.parentElement.style.display = ric ? "none" : "";
+  if (ric) { sN.el.max = algo === "fib" ? 6 : 8; if (+sN.el.value > +sN.el.max) sN.set(sN.el.max); }   // set rientra qui
+  T = algo === "bubble" ? tracciaBubble(dati.vals) : algo === "insertion" ? tracciaInsertion(dati.vals)
+    : algo === "binaria" ? tracciaBinaria(dati.vals, dati.x) : tracciaRicorsione(algo, sN.value());
+  posX = {}; acc = 0;
+  mostraCodice();
+  l1.et(INFO[algo].c1); l2.et(INFO[algo].c2); lO.set(INFO[algo].O);
+  document.getElementById("legenda").innerHTML = LEGENDE[ric ? "ric" : algo]
+    .map(([c, t]) => `<i class="q" style="background:${c};${c === "#fff" ? "border:1px dashed #bbb" : ""}"></i>${t}`).join(" ");
+  const d = document.getElementById("dati");
+  if (ric) d.innerHTML = algo === "fatt" ? "$n! = n\\cdot(n-1)!,\\quad 1! = 1$" : "$F_n = F_{n-1}+F_{n-2},\\quad F_0=0,\\ F_1=1$";
+  else { const a = algo === "binaria" ? [...dati.vals].sort((p, q) => p - q) : dati.vals;
+    d.innerHTML = `$a = [${a.join(",\\,")}]$` + (algo === "binaria" ? `$,\\quad x = ${dati.x}$` : ""); }
+  Doll.tex(d);
+  vai(0);
+}
+function vai(q) {
+  k = Math.max(0, Math.min(T.length - 1, q));
+  const s = T[k], righe = s.line === null ? [] : Array.isArray(s.line) ? s.line : [s.line, s.line];
+  sorgente.querySelectorAll(".riga").forEach(el => { const l = +el.dataset.l;
+    el.classList.toggle("attiva", righe.length > 0 && l >= righe[0] && l <= righe[righe.length - 1]); });
+  document.getElementById("variabili").textContent = s.vars;
+  document.getElementById("messaggio").innerHTML = s.msg;
+  lPasso.set(`${k + 1} / ${T.length}`); l1.set(String(s.c1)); l2.set(String(s.c2));
+  richiedi();
+}
+
+// ---------------------------------------------------------------- percorso guidato
+// ogni passo sceglie l'algoritmo e salta a un momento significativo della traccia
+const salta = pred => { const q = T.findIndex(pred); vai(q < 0 ? 0 : q); };
+const prepara = (a, n) => { anim.pausa(); if (n) sN.set(n); if (seme !== SEME0) { seme = SEME0; dati = nuoviDati(seme); } sAlgo.set(a); };
+// "Prova tu": il contatore delle chiamate di fib(n) arriva a 25. Chiamate(n) = 2 F(n+1) - 1 (verificato in Python):
+// n = 1..6 -> 1, 3, 5, 9, 15, 25; quindi solo n = 6 (il massimo dello slider per fib) arriva a 25.
+const prova = Doll.bersaglio(null, { testo: "Scegli $n$ ed esegui fib finché le chiamate sono 25",
+  verifica: () => algo === "fib" && !!T[k] && T[k].c1 === 25,
+  ok: "$n=6$: 25 chiamate $=2F_7-1$; con $n=5$ erano 15" });
+sN.el.parentElement.after(prova.el);                   // sotto lo slider di n
+const passo = (testo, f, conProva = false) => ({ testo, applica: () => { f(); prova.mostra(conProva); } });
+Doll.guida([
+  passo("Bubble sort: confronta i vicini e scambia se fuori ordine",
+    () => { prepara("bubble"); salta(s => s.meta.tipo === "swap" && s.meta.i === 1); }),
+  passo("Insertion sort: la key scivola a sinistra fino al suo posto",
+    () => { prepara("insertion"); salta(s => s.meta.tipo === "shift" && s.meta.i >= 3); }),
+  passo("Ricerca binaria su 8 elementi: quante iterazioni? Prevedi, poi Avanti",
+    () => { prepara("binaria"); vai(1); }),
+  passo("Ogni iterazione dimezza $[lo,\\,hi]$: al massimo $\\log_2 8+1=4$",
+    () => { prepara("binaria"); vai(T.length - 1); }),
+  passo("Ricorsione: lo stack cresce, poi i valori risalgono",
+    () => { prepara("fib", 5); salta(s => s.meta.fatti >= 4 && s.line === 1); }),
+  passo("Prova tu: con quale $n$ fib arriva a 25 chiamate?",
+    () => { prepara("fib", 3); vai(0); }, true),
+]);
+adatta();
+Doll.pronto();
+</script>
+</body>
+</html>

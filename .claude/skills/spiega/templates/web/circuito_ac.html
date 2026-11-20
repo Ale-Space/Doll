@@ -1,0 +1,478 @@
+<!doctype html>
+<!--
+TEMPLATE WEB: circuito in regime sinusoidale (canvas 2D, nessuna libreria oltre KaTeX).
+Elettrotecnica: RLC serie alimentato da v_s(t) = √2·V·sin(ωt). Tutto disegnato a mano su UN canvas
+diviso in 4 zone: (a) fasori rotanti + (b) forme d'onda con le proiezioni (stessa scala verticale,
+cosi' le linee tratteggiate collegano la punta del fasore al valore istantaneo), schema del circuito
+con i pallini della corrente (velocita' e verso seguono i(t)), (c) curva di risonanza |I|(f)
+oppure triangolo delle potenze.
+
+Convenzioni (tienile se adatti la pagina):
+  - fasori in valore EFFICACE per le letture; nel diagramma la lunghezza e' l'AMPIEZZA di picco
+    (√2 x efficace) perche' la proiezione sull'asse verticale deve dare il valore istantaneo;
+  - riferimento: V_s a fase 0; φ = arg Z > 0 induttivo (corrente in ritardo), < 0 capacitivo;
+  - animazione rallentata: un periodo dura T_VIS secondi qualunque sia f (lo dice la nota);
+  - tensione e corrente hanno scale diverse (cerchio = fondo scala, scritto sotto il diagramma).
+
+Idee per esercizi simili:
+  - Transitori RC / RL / RLC (Elettrotecnica, Circuiti): sostituisci il generatore con un gradino
+    (interruttore che si chiude a t = 0) e integra l'equazione del circuito nel loop di animazione
+    (Eulero o RK4 su q e i, dt piccolo); il pannello (b) diventa v_C(t), i(t) con la costante di tempo
+    τ = RC oppure L/R segnata; il pannello (c) puo' mostrare l'energia nel condensatore / induttore.
+  - Equivalente di Thevenin / Norton: schema a sinistra, a destra la retta del bipolo V = V_th − R_th I
+    e il punto di lavoro al variare del carico (slider R_L), con la massima potenza trasferita.
+  - Filtri e diagrammi di Bode (Circuiti elettronici, Elettronica applicata): stessa H(jω) = V_out/V_in,
+    pannello (c) con |H| in dB e fase su asse log di f, marcatore a f e pulsazione di taglio;
+    passa-basso RC, passa-alto, passa-banda RLC (e' questo stesso circuito con uscita su R).
+  - Sistemi trifase: tre fasori a 120°, stella / triangolo, carico squilibrato, tensioni concatenate
+    come differenze di fasori, potenza totale; le forme d'onda sono tre sinusoidi sfasate.
+  - Rifasamento: aggiungi un C in parallelo e mostra il triangolo delle potenze prima/dopo.
+Per circuiti VERI a piu' maglie, operazionali, transistori, transitori con interruttori: usa il
+simulatore di Falstad (link generato), vedi templates/web/circuito_falstad.md.
+
+Regole: titolo breve, dati in .doll-dati, didascalie <= ~12 parole, Doll.guida per il percorso
+guidato (ogni passo = uno stato fotografato dal controllo), Doll.pronto() alla fine.
+Guida: prevedi -> osserva -> spiega (passo 3 chiede "la corrente cresce o cala?" con la curva di
+risonanza nascosta, passo 4 la mostra), ultimo passo "Prova tu" con Doll.bersaglio (risonanza a 100 Hz).
+Build:  .venv/bin/python .claude/skills/spiega/scripts/web_build.py pagina.html
+Check:  .venv/bin/python .claude/skills/spiega/scripts/web_check.py interattivo.html
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Circuito RLC serie</title>
+<!-- doll:lib katex -->
+<style>
+  /* il canvas e' posizionato in assoluto: cosi' non impedisce alla vista di restringersi al resize */
+  #vista canvas { position: absolute; left: 0; top: 0; }
+  .doll-check { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+  .doll-check input { accent-color: var(--blu); width: 16px; height: 16px; margin: 0; }
+  /* schermo stretto: la vista diventa una colonna alta di 4 riquadri; body con altezza libera,
+     altrimenti la didascalia (in fondo al body alto 100%) copre la vista */
+  @media (max-width: 820px) { body { height: auto; } #vista { min-height: 980px; } }
+</style>
+</head>
+<body>
+<header class="doll-top">
+  <h1>Circuito RLC serie</h1>
+  <div class="doll-dati">$V = 10\ \mathrm{V}$ (eff.), $\quad Z = R + j\left(\omega L - \dfrac{1}{\omega C}\right)$</div>
+</header>
+<main class="doll-main">
+  <section class="doll-vista" id="vista"></section>
+  <aside class="doll-pannello" id="pannello"></aside>
+</main>
+<footer class="doll-didascalia" id="didascalia"></footer>
+
+<script>
+const COL = Doll.col;
+const V = 10;        // tensione EFFICACE del generatore [V]
+const T_VIS = 3;     // [s] durata di un periodo nell'animazione (rallentata)
+const FMIN = 10, FMAX = 2000;   // [Hz] intervallo dello slider e dell'asse della curva di risonanza
+const P = { modo: "RLC", R: 50, L: 0.1, C: 10e-6, f: 100 };      // parametri (unita' SI)
+const opz = { fermi: false, comp: false, pannelloC: "ris" };      // opzioni di vista
+const colore = { vs: COL.blu, i: COL.arancio, vR: COL.verde, vL: COL.rosso, vC: COL.viola };
+
+/* ---------- fisica: tutto in regime sinusoidale, valori efficaci ---------- */
+function calcola(f) {
+  const w = 2 * Math.PI * f;
+  const hasL = P.modo === "RLC" || P.modo === "RL", hasC = P.modo === "RLC" || P.modo === "RC";
+  const XL = hasL ? w * P.L : 0, XC = hasC ? 1 / (w * P.C) : 0, X = XL - XC;
+  const Zm = Math.hypot(P.R, X), phi = Math.atan2(X, P.R);   // φ = arg Z
+  const I = V / Zm;                                          // corrente efficace
+  return { f, w, hasL, hasC, XL, XC, X, Zm, phi, I,
+           VR: I * P.R, VL: I * XL, VC: I * XC,               // tensioni efficaci
+           Pa: I * I * P.R, Q: I * I * X, S: V * I };         // P [W], Q [var], S [VA]
+}
+const f0 = () => 1 / (2 * Math.PI * Math.sqrt(P.L * P.C));   // risonanza (solo RLC)
+
+/* ---------- formattazione (virgola decimale, prefissi) ---------- */
+const it = (x, d = 2) => x.toFixed(d).replace(".", ",").replace(/^-/, "−");
+const sig = (x, n = 3) => { if (!isFinite(x)) return "∞"; if (Math.abs(x) < 1e-9) return "0";
+  const d = n - 1 - Math.floor(Math.log10(Math.abs(x) * 1.0000001)); return it(x, Math.max(0, Math.min(d, 6))); };
+function eng(x, u, n = 3) {   // 0.01 -> "10 mH"
+  const pref = [[1e3, "k"], [1, ""], [1e-3, "m"], [1e-6, "µ"], [1e-9, "n"]];
+  for (const [k, p] of pref) if (Math.abs(x) >= k * 0.9995 || k === 1e-9) return sig(x / k, n) + " " + p + u;
+}
+const tx = s => s.replace(/,/g, "{,}").replace(/−/g, "-").replace(/µ/g, "\\mu ");   // testo -> TeX
+// fondo scala "tondo" >= x (passi fitti, cosi' i fasori occupano bene il cerchio)
+const niceCeil = x => { const e = 10 ** Math.floor(Math.log10(x)), m = x / e;
+  return ([1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find(q => q >= m - 1e-9)) * e; };
+
+/* ---------- canvas e layout ---------- */
+const cv = Doll.canvas(), ctx = cv.ctx;
+let Z = {};   // zone: circ, top (fasori + onde), c
+function layout() {
+  const W = cv.w, H = cv.h, g = 10;
+  if (W >= 640) {
+    const hTop = Math.round((H - 3 * g) * 0.55), hBot = H - 3 * g - hTop, wC = Math.round((W - 3 * g) * 0.46);
+    Z.top = { x: g, y: g, w: W - 2 * g, h: hTop };
+    Z.circ = { x: g, y: 2 * g + hTop, w: wC, h: hBot };
+    Z.c = { x: 2 * g + wC, y: 2 * g + hTop, w: W - 3 * g - wC, h: hBot };
+    // fasori: quadrato a sinistra della zona top; onde a destra, STESSO centro e raggio (proiezioni orizzontali)
+    const t = Z.top, s = Math.min(t.h - 24, t.w * 0.4);
+    Z.fas = { cx: t.x + s / 2 + 6, cy: t.y + 24 + (t.h - 24) / 2, r: s / 2 - 34 };
+    Z.onda = { x0: t.x + s + 40, x1: t.x + t.w - 46, cy: Z.fas.cy, r: Z.fas.r };
+    Z.ondaBox = null;
+  } else {   // schermo stretto: quattro righe (fasori e onde separati, niente linee di proiezione)
+    const hs = [0.24, 0.28, 0.22, 0.26].map(q => Math.round((H - 5 * g) * q)); let y = g;
+    const riga = h => { const z = { x: g, y, w: W - 2 * g, h }; y += h + g; return z; };
+    Z.circ = riga(hs[0]); Z.top = riga(hs[1]); Z.ondaBox = riga(hs[2]); Z.c = riga(hs[3]);
+    const t = Z.top, o = Z.ondaBox;
+    Z.fas = { cx: t.x + t.w / 2, cy: t.y + 22 + (t.h - 22) / 2, r: (t.h - 22) / 2 - 30 };
+    Z.onda = { x0: o.x + 52, x1: o.x + o.w - 46, cy: o.y + 22 + (o.h - 40) / 2, r: (o.h - 40) / 2 - 8 };
+  }
+  // schema: rettangolo del circuito dentro la zona
+  const c = Z.circ;
+  Z.loop = { xl: c.x + Math.max(70, c.w * 0.17), xr: c.x + c.w - Math.max(70, c.w * 0.17),
+             yt: c.y + 62, yb: c.y + c.h - 30 };
+}
+
+/* ---------- primitive di disegno ---------- */
+function freccia(x0, y0, x1, y1, col, lw = 2.5) {
+  const L = Math.hypot(x1 - x0, y1 - y0); if (L < 2) return;
+  const ux = (x1 - x0) / L, uy = (y1 - y0) / L, h = Math.min(11, L * 0.45), b = h * 0.45;
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = lw; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1 - ux * h * 0.8, y1 - uy * h * 0.8); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - ux * h - uy * b, y1 - uy * h + ux * b);
+  ctx.lineTo(x1 - ux * h + uy * b, y1 - uy * h - ux * b); ctx.closePath(); ctx.fill();
+}
+function linea(pts, col, lw = 1, dash = null) {
+  ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.setLineDash(dash || []);
+  ctx.beginPath(); pts.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke(); ctx.setLineDash([]);
+}
+function testo(s, x, y, col = COL.testo, size = 13, align = "left", base = "middle", peso = "") {
+  ctx.font = `${peso} ${size}px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif`;
+  ctx.fillStyle = col; ctx.textAlign = align; ctx.textBaseline = base; ctx.fillText(s, x, y);
+}
+// simbolo matematico con pedice (es. V_R) + testo opzionale dopo; centrato in (x, y) se align="center"
+function simbolo(b, sub, x, y, col, align = "center", dopo = "", size = 16) {
+  const fm = `italic ${size}px "Times New Roman", Times, serif`, fs = `${Math.round(size * 0.7)}px "Times New Roman", Times, serif`,
+        fd = `${size - 3}px -apple-system, Helvetica, Arial, sans-serif`;
+  ctx.font = fm; const wb = ctx.measureText(b).width; ctx.font = fs; const ws = sub ? ctx.measureText(sub).width + 1 : 0;
+  ctx.font = fd; const wd = dopo ? ctx.measureText(dopo).width : 0;
+  const tot = wb + ws + wd; let x0 = align === "center" ? x - tot / 2 : align === "right" ? x - tot : x;
+  ctx.fillStyle = col; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  ctx.font = fm; ctx.fillText(b, x0, y);
+  if (sub) { ctx.font = fs; ctx.fillText(sub, x0 + wb + 1, y + size * 0.3); }
+  if (dopo) { ctx.font = fd; ctx.fillText(dopo, x0 + wb + ws, y + 1); }
+}
+function riquadro(z, titolo) {
+  ctx.fillStyle = "#fcfbf8"; ctx.strokeStyle = "#ebe8df"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(z.x + 0.5, z.y + 0.5, z.w - 1, z.h - 1, 8); ctx.fill(); ctx.stroke();
+  testo(titolo.toUpperCase(), z.x + 12, z.y + 14, COL.grigio, 11, "left", "middle", "600");
+}
+
+/* ---------- stato dell'animazione ---------- */
+let tv = 0;          // tempo dell'animazione [s] (rallentato: un periodo = T_VIS)
+let sPallini = 0;    // spostamento dei pallini lungo il circuito [px]
+let R0 = calcola(P.f);
+
+/* ---------- (a) + (b): fasori e forme d'onda ---------- */
+function disegnaFasoriOnde() {
+  const allineati = !Z.ondaBox;   // fasori e onde affiancati con lo stesso asse verticale?
+  if (allineati) riquadro(Z.top, "(a) fasori rotanti   ·   (b) forme d'onda");
+  else { riquadro(Z.top, "(a) fasori rotanti"); riquadro(Z.ondaBox, "(b) forme d'onda"); }
+  const { cx, cy, r } = Z.fas, r0 = R0, s2 = Math.SQRT2;
+  const th = 2 * Math.PI * tv / T_VIS;              // ωt (fase del generatore)
+  const thF = opz.fermi ? 0 : th;                     // angolo usato per disegnare i fasori
+  // fondo scala: tensioni (max ampiezza di picco) e corrente (picco alla risonanza √2 V/R)
+  const VFS = niceCeil(s2 * Math.max(V, r0.VR, r0.VL, r0.VC) * 1.02), IFS = niceCeil(s2 * V / P.R * 1.02);
+  const kV = r / VFS, kI = r / IFS;
+  // griglia
+  linea([[cx - r - 10, cy], [cx + r + 10, cy]], "#d9d6cc"); linea([[cx, cy - r - 10], [cx, cy + r + 10]], "#d9d6cc");
+  ctx.strokeStyle = "#e4e1d8"; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.stroke(); ctx.setLineDash([]);
+  testo("Re", cx + r + 12, cy + 10, COL.grigio, 11, "right"); testo("Im", cx + 5, cy - r - 8, COL.grigio, 11);
+  testo(`cerchio = ${sig(VFS, 2)} V · ${eng(IFS, "A", 2)}`, Z.top.x + 12, Z.top.y + 32, COL.grigio, 11, "left");
+  // fasori (ampiezza di picco, angolo θ + fase)
+  const fas = [];
+  const add = (nome, sub, A, k, ang, col, lw) => fas.push({ nome, sub, A, k, ang, col, lw,
+      x: cx + A * k * Math.cos(ang), y: cy - A * k * Math.sin(ang), proiezione: A * Math.sin(ang - thF + th) });
+  const aI = thF - r0.phi;                                         // la corrente ritarda di φ
+  add("V", "R", s2 * r0.VR, kV, aI, colore.vR, 2.5);
+  if (r0.hasL) add("V", "L", s2 * r0.VL, kV, aI + Math.PI / 2, colore.vL, 2.5);
+  if (r0.hasC) add("V", "C", s2 * r0.VC, kV, aI - Math.PI / 2, colore.vC, 2.5);
+  add("V", "s", s2 * V, kV, thF, colore.vs, 3.5);
+  add("I", "", s2 * r0.I, kI, aI, colore.i, 2.5);
+  const fR = fas[0], fS = fas.find(f => f.sub === "s"), fI = fas.find(f => f.nome === "I");
+  // costruzione: da V_R a V_s c'e' V_L + V_C (tratteggiato)
+  if (r0.hasL || r0.hasC) linea([[fR.x, fR.y], [fS.x, fS.y]], "#9a988f", 1.2, [5, 4]);
+  for (const f of fas) freccia(cx, cy, f.x, f.y, f.col, f.lw);
+  // etichette dei fasori, spostate se si sovrappongono
+  const lab = [];
+  for (const f of fas) {
+    const L = Math.hypot(f.x - cx, f.y - cy); if (L < 3) continue;
+    // I e V_R sono paralleli: etichette da parti opposte della freccia
+    const ux = (f.x - cx) / L, uy = (f.y - cy) / L, perp = f.nome === "I" ? 16 : f.sub === "R" ? -16 : 0;
+    let p = { x: f.x + ux * 16 - uy * perp, y: f.y + uy * 16 + ux * perp, f };
+    for (let k = 0; k < 4 && lab.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 22); k++) { p.x += -uy * 18; p.y += ux * 18; }
+    lab.push(p);
+  }
+  for (const p of lab) simbolo(p.f.nome, p.f.sub, p.x, p.y, p.f.col);
+  // arco dello sfasamento φ tra V_s e I
+  if (Math.abs(r0.phi) > 0.02) {
+    const ra = Math.min(34, r * 0.3);
+    ctx.strokeStyle = COL.testo; ctx.lineWidth = 1.2; ctx.beginPath();
+    ctx.arc(cx, cy, ra, -thF, -aI, r0.phi < 0); ctx.stroke();
+    const am = (thF + aI) / 2; simbolo("φ", "", cx + (ra + 10) * Math.cos(am), cy - (ra + 10) * Math.sin(am), COL.testo, "center", "", 15);
+  }
+
+  // --- forme d'onda: x0 = "ora", verso destra il passato (2 periodi) ---
+  {
+  const { x0, x1, cy, r } = Z.onda, kV = r / VFS, kI = r / IFS;   // stessi fondo scala dei fasori
+  const yv = v => cy - v * kV, yi = i => cy - i * kI, N = 260;
+  linea([[x0, cy], [x1, cy]], "#cfccc2"); linea([[x0, cy - r], [x1, cy - r]], "#eeebe3"); linea([[x0, cy + r], [x1, cy + r]], "#eeebe3");
+  linea([[x0, cy - r - 6], [x0, cy + r + 6]], "#cfccc2");
+  testo(`+${sig(VFS, 2)} V`, x0 - 6, cy - r, COL.grigio, 11, "right"); testo(`−${sig(VFS, 2)} V`, x0 - 6, cy + r, COL.grigio, 11, "right");
+  testo(`+${eng(IFS, "A", 2)}`, x1 + 6, cy - r, colore.i, 11); testo(`−${eng(IFS, "A", 2)}`, x1 + 6, cy + r, colore.i, 11);
+  const T_ms = 1000 / P.f;
+  [["ora", 0], [`−T = −${sig(T_ms, 3)} ms`, 1], ["−2T", 2]].forEach(([s, k]) => { const x = x0 + (x1 - x0) * k / 2;
+    linea([[x, cy - 4], [x, cy + 4]], "#9a988f"); testo(s, x + (k ? 0 : 4), cy + r + 14, COL.grigio, 11, k ? "center" : "left"); });
+  const curva = (A, fase, y, col, lw, dash) => { const pts = [];
+    for (let n = 0; n <= N; n++) { const u = n / N; pts.push([x0 + (x1 - x0) * u, y(A * Math.sin(th - 4 * Math.PI * u + fase))]); }
+    linea(pts, col, lw, dash); };
+  const fI0 = -r0.phi;
+  if (opz.comp) {
+    curva(s2 * r0.VR, fI0, yv, colore.vR, 1.6);
+    if (r0.hasL) curva(s2 * r0.VL, fI0 + Math.PI / 2, yv, colore.vL, 1.6);
+    if (r0.hasC) curva(s2 * r0.VC, fI0 - Math.PI / 2, yv, colore.vC, 1.6);
+  }
+  curva(s2 * V, 0, yv, colore.vs, 2.6);
+  curva(s2 * r0.I, fI0, yi, colore.i, 2.6, [7, 4]);
+  // proiezioni: dalla punta del fasore al valore istantaneo (solo se i fasori ruotano)
+  if (!opz.fermi) {
+    const proj = opz.comp ? fas : [fS, fI];
+    for (const f of proj) { if (f.A < 1e-9) continue;
+      const y = f.nome === "I" ? yi(f.proiezione) : yv(f.proiezione);
+      if (allineati) linea([[f.x, f.y], [x0, y]], f.col, 1, [3, 4]);
+      ctx.fillStyle = f.col; ctx.beginPath(); ctx.arc(x0, y, 4, 0, 2 * Math.PI); ctx.fill(); }
+  }
+  // legenda
+  const leg = [["v", "s", colore.vs], ["i", "", colore.i]];
+  if (opz.comp) { leg.push(["v", "R", colore.vR]); if (r0.hasL) leg.push(["v", "L", colore.vL]); if (r0.hasC) leg.push(["v", "C", colore.vC]); }
+  const dl = allineati ? 52 : 40;   // passo della legenda (piu' stretto su schermo piccolo)
+  let lx = x1 - leg.length * dl + 10; const ly = (Z.ondaBox || Z.top).y + 14;
+  for (const [b, s, c] of leg) { linea([[lx, ly], [lx + 16, ly]], c, 2.6, b === "i" ? [5, 3] : null); simbolo(b, s, lx + 19, ly, c, "left", "", 15); lx += dl; }
+  }
+}
+
+/* ---------- schema del circuito con i pallini della corrente ---------- */
+function percorso() {   // perimetro in senso orario partendo dall'angolo in alto a sinistra
+  const { xl, xr, yt, yb } = Z.loop;
+  return [[xl, yt], [xr, yt], [xr, yb], [xl, yb], [xl, yt]];
+}
+function puntoA(pts, s) {
+  for (let k = 0; k < pts.length - 1; k++) {
+    const [ax, ay] = pts[k], [bx, by] = pts[k + 1], L = Math.hypot(bx - ax, by - ay);
+    if (s <= L) return [ax + (bx - ax) * s / L, ay + (by - ay) * s / L]; s -= L;
+  }
+  return pts[pts.length - 1];
+}
+function disegnaCircuito() {
+  riquadro(Z.circ, "circuito");
+  const { xl, xr, yt, yb } = Z.loop, r0 = R0, nero = "#2a2a2e";
+  const xR = xl + (xr - xl) * 0.32, xL = xl + (xr - xl) * 0.7, yC = (yt + yb) / 2, yS = (yt + yb) / 2;
+  const mezzoR = 30, mezzoL = 32, gapC = 6, rS = 20;
+  ctx.lineJoin = "round";
+  // fili (con le interruzioni dove ci sono i componenti presenti)
+  const segs = [[[xl, yS - rS], [xl, yt], [xR - mezzoR, yt]],
+                [[xR + mezzoR, yt], r0.hasL ? [xL - mezzoL, yt] : [xr, yt]],
+                [r0.hasL ? [xL + mezzoL, yt] : [xr, yt], [xr, yt], r0.hasC ? [xr, yC - gapC] : [xr, yb]],
+                [r0.hasC ? [xr, yC + gapC] : [xr, yb], [xr, yb], [xl, yb], [xl, yS + rS]]];
+  for (const s of segs) linea(s, nero, 2);
+  // resistore: zig-zag
+  const zz = [[xR - mezzoR, yt]]; for (let k = 0; k < 6; k++) zz.push([xR - mezzoR + (k + 0.5) * 10, yt + (k % 2 ? 8 : -8)]);
+  zz.push([xR + mezzoR, yt]); linea(zz, nero, 2);
+  simbolo("R", "", xR, yt - 26, nero, "center", ` = ${eng(P.R, "Ω")}`);
+  // induttore: 4 spire (semicerchi)
+  if (r0.hasL) {
+    ctx.strokeStyle = nero; ctx.lineWidth = 2; ctx.beginPath();
+    for (let k = 0; k < 4; k++) ctx.arc(xL - mezzoL + 8 + 16 * k, yt, 8, Math.PI, 0);
+    ctx.stroke(); simbolo("L", "", xL, yt - 26, nero, "center", ` = ${eng(P.L, "H")}`);
+  }
+  // condensatore: due armature
+  if (r0.hasC) {
+    linea([[xr - 18, yC - gapC], [xr + 18, yC - gapC]], nero, 3); linea([[xr - 18, yC + gapC], [xr + 18, yC + gapC]], nero, 3);
+    simbolo("C", "", xr - 26, yC, nero, "right", ` = ${eng(P.C, "F")}`);
+  }
+  // generatore sinusoidale
+  ctx.strokeStyle = nero; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(xl, yS, rS, 0, 2 * Math.PI); ctx.stroke();
+  const sin = []; for (let k = 0; k <= 24; k++) { const u = k / 24; sin.push([xl - 11 + 22 * u, yS - 6 * Math.sin(2 * Math.PI * u)]); }
+  linea(sin, nero, 1.8);
+  testo("+", xl + 9, yS - rS - 9, nero, 14, "left"); testo("−", xl + 9, yS + rS + 9, nero, 14, "left");
+  simbolo("v", "s", xl - rS - 10, yS, colore.vs, "right", "", 17);
+  // freccia del verso positivo di i
+  const xa = xl + (xR - mezzoR - xl) * 0.5;
+  freccia(xa - 10, yt, xa + 8, yt, colore.i, 2); simbolo("i", "", xa, yt - 14, colore.i, "center", "", 16);
+  // pallini della corrente (sopra i fili)
+  const pts = percorso(), Ltot = 2 * (xr - xl) + 2 * (yb - yt), passo = 26;
+  ctx.fillStyle = "#e3a008";
+  const s0 = ((sPallini % passo) + passo) % passo;
+  for (let s = s0; s < Ltot; s += passo) {
+    const [x, y] = puntoA(pts, s);
+    if (Math.hypot(x - xl, y - yS) < rS + 2) continue;                          // non dentro il generatore
+    if (y === yt && (Math.abs(x - xR) < mezzoR + 3 || (r0.hasL && Math.abs(x - xL) < mezzoL + 3))) continue;  // ne' sui simboli
+    if (r0.hasC && x === xr && Math.abs(y - yC) < gapC + 3) continue;
+    ctx.beginPath(); ctx.arc(x, y, 3.4, 0, 2 * Math.PI); ctx.fill();
+  }
+  // valore istantaneo di i
+  const th = 2 * Math.PI * tv / T_VIS, iIst = Math.SQRT2 * r0.I * Math.sin(th - r0.phi);
+  testo(`i(t) = ${it(iIst * (Math.abs(iIst) < 1 ? 1000 : 1), Math.abs(iIst) < 1 ? 0 : 2)} ${Math.abs(iIst) < 1 ? "mA" : "A"}`,
+        (xl + xr) / 2, yb + 15, colore.i, 12, "center");
+}
+
+/* ---------- (c) curva di risonanza |I|(f) ---------- */
+function disegnaRisonanza() {
+  const z = Z.c; riquadro(z, "(c) risonanza |I|(f)");
+  const m = { l: 56, r: 18, t: 34, b: 32 }, X0 = z.x + m.l, X1 = z.x + z.w - m.r, Y0 = z.y + z.h - m.b, Y1 = z.y + m.t;
+  const lf0 = Math.log10(FMIN), lf1 = Math.log10(FMAX), xf = f => X0 + (Math.log10(f) - lf0) / (lf1 - lf0) * (X1 - X0);
+  const Imax = V / P.R, yTop = niceCeil(Imax * 1.1), yI = i => Y0 - i / yTop * (Y0 - Y1);
+  // assi e griglia
+  for (const d of [10, 100, 1000]) for (let k = 1; k < 10; k++) { const f = d * k; if (f < FMIN || f > FMAX) continue;
+    linea([[xf(f), Y0], [xf(f), Y1]], k === 1 ? "#e2dfd6" : "#f1efe9"); }
+  [10, 100, 1000].forEach(f => testo(f >= 1000 ? `${f / 1000} kHz` : `${f} Hz`, xf(f), Y0 + 14, COL.grigio, 11, "center"));
+  const passoY = yTop / 4; for (let k = 0; k <= 4; k++) { const i = k * passoY;
+    linea([[X0, yI(i)], [X1, yI(i)]], k ? "#f1efe9" : "#cfccc2"); testo(k ? eng(i, "A", 2) : "0", X0 - 6, yI(i), COL.grigio, 11, "right"); }
+  // banda a -3 dB e f0 (solo RLC)
+  if (P.modo === "RLC") {
+    const a = P.R / (2 * P.L), w0 = 1 / Math.sqrt(P.L * P.C), w1 = -a + Math.hypot(a, w0), w2 = a + Math.hypot(a, w0);
+    const f1 = Math.max(FMIN, w1 / (2 * Math.PI)), f2 = Math.min(FMAX, w2 / (2 * Math.PI));
+    if (f2 > f1) { ctx.fillStyle = "rgba(43,108,176,0.07)"; ctx.fillRect(xf(f1), Y1, xf(f2) - xf(f1), Y0 - Y1); }
+    const F0 = f0();
+    if (F0 >= FMIN && F0 <= FMAX) { linea([[xf(F0), Y0], [xf(F0), Y1]], COL.grigio, 1, [4, 4]);
+      simbolo("f", "0", xf(F0) + 4, Y1 + 8, COL.grigio, "left", ` = ${sig(F0, 3)} Hz`, 14); }
+  }
+  // curva
+  const pts = []; for (let n = 0; n <= 300; n++) { const f = 10 ** (lf0 + (lf1 - lf0) * n / 300); pts.push([xf(f), yI(calcola(f).I)]); }
+  linea(pts, colore.i, 2.6);
+  // marcatore alla frequenza attuale
+  const x = xf(P.f), y = yI(R0.I);
+  linea([[x, Y0], [x, y]], colore.i, 1, [2, 3]);
+  ctx.fillStyle = colore.i; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 6, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+  // valore nel titolo (a destra): non si sovrappone mai alla curva
+  testo(`I = ${eng(R0.I, "A")} · f = ${sig(P.f, 3)} Hz`, z.x + z.w - 14, z.y + 14, colore.i, 12, "right", "middle", "600");
+}
+
+/* ---------- (c) in alternativa: triangolo delle potenze ---------- */
+function disegnaTriangolo() {
+  const z = Z.c; riquadro(z, "(c) triangolo delle potenze");
+  const { Pa, Q, S, phi } = R0, k = Math.min((z.w - 200) / S, (z.h - 92) / S);
+  const ox = z.x + 120, oy = Q >= 0 ? z.y + z.h - 38 : z.y + 62;
+  const px = ox + Pa * k, qy = oy - Q * k;
+  ctx.fillStyle = "rgba(43,108,176,0.06)"; ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(px, oy); ctx.lineTo(px, qy); ctx.closePath(); ctx.fill();
+  freccia(ox, oy, px, oy, COL.verde, 3); freccia(px, oy, px, qy, COL.rosso, 3); freccia(ox, oy, px, qy, COL.blu, 3);
+  simbolo("P", "", (ox + px) / 2, oy + (Q >= 0 ? 16 : -14), COL.verde, "center", ` = ${sig(Pa, 3)} W`);
+  if (Math.abs(Q * k) > 4) simbolo("Q", "", px + 10, (oy + qy) / 2, COL.rosso, "left", ` = ${sig(Q, 3)} var`);
+  // S: etichetta sul lato esterno dell'ipotenusa
+  const Lh = Math.hypot(px - ox, qy - oy) || 1, dx = (px - ox) / Lh, dy = (qy - oy) / Lh, sg = Q >= 0 ? 1 : -1;
+  simbolo("S", "", (ox + px) / 2 + sg * dy * 14, (oy + qy) / 2 - sg * dx * 14, COL.blu, "right", ` = ${sig(S, 3)} VA`);
+  if (Math.abs(phi) > 0.02) { ctx.strokeStyle = COL.testo; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(ox, oy, 30, 0, -phi, phi > 0); ctx.stroke();
+    simbolo("φ", "", ox + 42 * Math.cos(phi / 2), oy - 42 * Math.sin(phi / 2), COL.testo, "center", "", 15); }
+  testo(`cos φ = ${it(Math.cos(phi), 3)}  ${Math.abs(phi) < 1e-3 ? "(solo potenza attiva)" : phi > 0 ? "(carico induttivo)" : "(carico capacitivo)"}`,
+        z.x + z.w - 14, Q >= 0 ? z.y + 34 : z.y + z.h - 16, COL.testo, 13, "right");
+}
+
+function disegna() {
+  ctx.clearRect(0, 0, cv.w, cv.h); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.w, cv.h);
+  disegnaFasoriOnde(); disegnaCircuito();
+  opz.pannelloC === "ris" ? disegnaRisonanza() : disegnaTriangolo();
+}
+
+/* ---------- pannello ---------- */
+// interruttore (checkbox) nello stile del pannello: helper locale, non c'e' in doll.js
+function interruttore(testoLab, valore, onChange) {
+  const d = document.createElement("label"); d.className = "doll-ctrl doll-check";
+  d.innerHTML = `<input type="checkbox"><span></span>`; document.getElementById("pannello").appendChild(d);
+  const inp = d.querySelector("input"); inp.checked = valore; d.querySelector("span").innerHTML = testoLab; Doll.tex(d);
+  inp.addEventListener("change", () => onChange(inp.checked));
+  return { value: () => inp.checked, set: v => { inp.checked = v; onChange(v); } };
+}
+// slider logaritmico: lo slider lavora su log10(valore); step "any" per poter impostare valori esatti (es. f0)
+const logSlider = (label, min, max, val, unita, chiave) => Doll.slider(null, { label, min: Math.log10(min), max: Math.log10(max),
+  step: "any", value: Math.log10(val), fmt: v => eng(10 ** v, unita), onInput: v => { P[chiave] = 10 ** v; cambia(); } });
+
+Doll.titoletto(null, "Circuito");
+const sModo = Doll.scelta(null, { label: "componenti", value: P.modo,
+  opzioni: [["RLC", "RLC serie"], ["R", "solo R"], ["RL", "RL serie"], ["RC", "RC serie"]], onChange: v => { P.modo = v; cambia(); } });
+const sR = logSlider("$R$", 1, 1000, P.R, "Ω", "R");
+const sL = logSlider("$L$", 1e-3, 1, P.L, "H", "L");
+const sC = logSlider("$C$", 1e-7, 1e-3, P.C, "F", "C");
+const sF = logSlider("$f$", FMIN, FMAX, P.f, "Hz", "f");
+
+Doll.titoletto(null, "Letture (valori efficaci)");
+const lZr = Doll.lettura(null, "$Z$"), lZp = Doll.lettura(null, "$Z$ polare"), lPhi = Doll.lettura(null, "$\\varphi$");
+const lI = Doll.lettura(null, "$I$"), lP = Doll.lettura(null, "$P = R I^2$"), lQ = Doll.lettura(null, "$Q = X I^2$"),
+      lS = Doll.lettura(null, "$S = V I$"), lCos = Doll.lettura(null, "$\\cos\\varphi$");
+const lF0 = Doll.lettura(null, "$f_0 = 1/(2\\pi\\sqrt{LC})$");
+Doll.titoletto(null, "Vista");
+const anim = Doll.animazione((dt) => {
+  tv += dt;
+  // pallini: velocita' proporzionale a i(t), normalizzata alla corrente massima V/R
+  sPallini += 70 * (Math.sin(2 * Math.PI * tv / T_VIS - R0.phi) * R0.I / (V / P.R)) * dt;
+  disegna();
+});
+const cFermi = interruttore("fasori fermi (sistema rotante)", opz.fermi, v => { opz.fermi = v; disegna(); });
+const cComp = interruttore("tensioni su $R$, $L$, $C$", opz.comp, v => { opz.comp = v; disegna(); });
+const sPan = Doll.scelta(null, { label: "pannello (c)", value: opz.pannelloC,
+  opzioni: [["ris", "curva di risonanza"], ["tri", "triangolo delle potenze"]], onChange: v => { opz.pannelloC = v; disegna(); } });
+
+const nota = document.createElement("p"); nota.className = "doll-nota";
+nota.textContent = `Animazione rallentata: un periodo dura ${T_VIS} s. Nel diagramma i fasori sono lunghi quanto l'ampiezza di picco (√2 × efficace).`;
+document.getElementById("pannello").appendChild(nota);
+
+function cambia() {
+  R0 = calcola(P.f);
+  const r = R0, deg = r.phi * 180 / Math.PI;
+  const X = Math.abs(r.X) < 1e-9 * r.Zm ? 0 : r.X, segno = X < 0 ? "-" : "+";   // a f0 esatta X ~ 1e-14: mostra 0
+  lZr(`$${tx(sig(P.R, 3))} ${segno} j\\,${tx(sig(Math.abs(X), 3))}\\ \\Omega$`);
+  lZp(`$${tx(sig(r.Zm, 3))}\\,\\angle\\,{${tx(it(deg, 1))}}^\\circ\\ \\Omega$`);
+  lPhi(`${it(deg, 1)}° ${Math.abs(deg) < 0.05 ? "(in fase)" : deg > 0 ? "(I in ritardo)" : "(I in anticipo)"}`);
+  lI(eng(r.I, "A"));
+  lP(`${sig(r.Pa, 3)} W`); lQ(`${sig(r.Q, 3)} var`); lS(`${sig(r.S, 3)} VA`);
+  lCos(it(Math.cos(r.phi), 3));
+  lF0(P.modo === "RLC" ? `${sig(f0(), 3)} Hz` : "—");
+  disegna();
+}
+
+// la vista cambia misura anche senza "resize" della finestra (es. quando la guida riempie la didascalia):
+// un ResizeObserver ridimensiona il canvas e ridisegna in ogni caso
+function adatta() { cv.fit(); layout(); disegna(); }
+new ResizeObserver(adatta).observe(document.getElementById("vista"));
+layout(); cambia();
+
+/* ---------- percorso guidato ---------- */
+function imposta(o) {
+  // prima i dati, poi gli slider (ogni set richiama cambia())
+  if (o.modo) sModo.set(o.modo);
+  if (o.R) sR.set(Math.log10(o.R)); if (o.L) sL.set(Math.log10(o.L)); if (o.C) sC.set(Math.log10(o.C));
+  if (o.f) sF.set(Math.log10(o.f));
+  cFermi.set(!!o.fermi); cComp.set(!!o.comp); sPan.set(o.pan || "ris");
+}
+const base = { R: 50, L: 0.1, C: 10e-6 };   // f0 = 159,2 Hz
+// "Prova tu": a f = 100 Hz (con L = 0,1 H) la risonanza vuole C = 1/((2π·100)²·0,1) = 25,33 µF (SymPy).
+// Tolleranza: f0 tra 95 e 105 Hz, cioe' C tra 22,98 e 28,07 µF (|φ| <= 7° a 100 Hz, R = 50 Ω);
+// R non sposta f0; se lo studente cambia anche L vale qualunque coppia con f0 ≈ 100 Hz.
+const prova = Doll.bersaglio(null, { testo: "Porta la risonanza a $f=100$ Hz cambiando $C$",
+  verifica: () => P.modo === "RLC" && Math.abs(P.f - 100) <= 5 && Math.abs(f0() - 100) <= 5,
+  ok: "Risonanza a 100 Hz: $C\\approx25{,}3\\ \\mu\\mathrm{F}$, $\\varphi\\approx0$" });
+document.getElementById("pannello").prepend(prova.el);   // in cima al pannello, ben visibile
+// prevedi -> osserva -> spiega: il passo 3 chiede (curva di risonanza nascosta), il 4 la mostra
+const passo = (o, provaTu = false) => () => { imposta(o); prova.mostra(provaTu); };
+Doll.guida([
+  { testo: "Solo $R$: tensione e corrente in fase, $\\varphi=0$",
+    applica: passo({ ...base, modo: "R", f: 100 }) },
+  { testo: "$f\\lt f_0$: prevale $C$, la corrente è in anticipo",
+    applica: passo({ ...base, modo: "RLC", f: 100, pan: "tri" }) },
+  { testo: "Aumenti $f$ fino a $f_0$: la corrente cresce o cala? Prevedi",
+    applica: passo({ ...base, modo: "RLC", f: 100, pan: "tri", comp: true }) },
+  { testo: "Cresce: alla risonanza $Z=R$ è minima, $I$ è massima",
+    applica: passo({ ...base, modo: "RLC", f: 1 / (2 * Math.PI * Math.sqrt(base.L * base.C)), comp: true }) },
+  { testo: "$f\\gt f_0$: prevale $L$, la corrente cala ed è in ritardo",
+    applica: passo({ ...base, modo: "RLC", f: 250 }) },
+  { testo: "Prova tu: a $f=100$ Hz scegli $C$ per la risonanza",
+    applica: passo({ ...base, modo: "RLC", f: 100 }, true) },
+]);
+anim.play();
+Doll.pronto();
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+katex 0.19.1 MIT
+jsxgraph 1.14.3 (MIT OR LGPL-3.0-or-later)
+plotly.js-dist-min 4.2.0 MIT
+three 0.187.0 MIT
+wavedrom 3.8.0 MIT
+3dmol 2.5.5 BSD-3-Clause
+digitaljs 0.14.2 BSD-2-Clause (bundle esbuild 0.25.10 con @joint/core 4.1 MPL-2.0, elkjs 0.11 EPL-2.0, jquery 3.7 + jquery-ui 1.14 MIT, 3vl BSD-2)

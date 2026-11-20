@@ -1,0 +1,506 @@
+<!doctype html>
+<!--
+TEMPLATE WEB: equazione di Schroedinger dipendente dal tempo in 1D (Fisica III / Fisica moderna,
+Meccanica quantistica, Dispositivi elettronici: tunnel).
+Esempio: pacchetto gaussiano psi(x,0) ~ exp(-(x-x0)^2/(4 sigma^2) + i k0 x) che evolve con
+Crank-Nicolson in unita' naturali hbar = m = 1 (lunghezze e tempi adimensionali, E = k^2/2).
+Potenziali (select): libero, barriera rettangolare (V0, a), gradino (V0), oscillatore armonico (omega),
+buca infinita (L). Bordi: assorbenti (potenziale immaginario -iW fuori da |x| < 60, la probabilita'
+assorbita viene contata) oppure pareti rigide. Modo "stati stazionari" per buca e oscillatore:
+autofunzioni sui loro livelli E_n e sovrapposizione (phi_a + phi_b)/sqrt2 che evolve (|psi|^2 oscilla
+con periodo 2 pi hbar/(E_b - E_a)).
+Letture: norma (resta 1: CN e' unitario), T e R simulate vs teoria (onda piana e media sul pacchetto),
+<E> vs V0, larghezza Delta x vs formula del pacchetto libero, <x> vs moto classico.
+
+Come e' fatto (per adattarlo):
+  NUCLEO NUMERICO (tra i commenti "=== nucleo" e "=== fine nucleo"): griglia, prepara() fattorizza la
+  matrice tridiagonale (1 + i dt H/2) una volta (algoritmo di Thomas), passo() fa un passo CN.
+  Righe "muro" = psi forzata a 0 (pareti rigide, buca infinita). Per un nuovo potenziale basta
+  scrivere V[j] in costruisci() e chiamare prepara(). Le osservabili sono somme sulla griglia.
+  Risoluzione: dx = 0,133 -> k dx <= 0,4 per k0 <= 3 (errore di dispersione ~1%).
+
+Idee per esercizi simili:
+- doppia barriera (tunnel risonante: T ~ 1 a certe energie), buca finita (stati legati + diffusione),
+  potenziale periodico di Kronig-Penney (bande), barriera triangolare (emissione di campo / Fowler-Nordheim);
+- doppia buca: tunnel tra le buche, splitting dei livelli, oscillazione di Rabi tra sinistra e destra;
+- misura di T(E): ripetere la simulazione per vari k0 e confrontare con la curva analitica (grafico);
+- principio di indeterminazione: Delta x * Delta p >= hbar/2 (Delta p dalla FFT o da <p^2>);
+- corrente di probabilita' j = Im(psi* dpsi/dx) come freccia o curva;
+- autostati numerici (diagonalizzare H tridiagonale) per potenziali arbitrari, metodo di shooting.
+
+Regole: titolo breve, dati in .doll-dati, didascalie <= ~12 parole, Doll.guida per il percorso
+guidato (ogni passo = uno stato fotografato dal controllo), Doll.pronto() alla fine.
+Build:  .venv/bin/python .claude/skills/spiega/scripts/web_build.py pagina.html
+Check:  .venv/bin/python .claude/skills/spiega/scripts/web_check.py interattivo.html
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pacchetto d'onda quantistico</title>
+<!-- doll:lib katex -->
+<style>
+  #legenda { left: auto; right: 12px; }
+  .doll-legenda i.tratto { background: none; border-top: 2px dashed #6b6b70; height: 0; width: 18px; }
+  /* mobile: con un pannello lungo doll.css lascerebbe la didascalia sopra il pannello; qui la pagina cresce */
+  @media (max-width: 820px) { html, body { height: auto; } .doll-main { flex: none; } }
+</style>
+</head>
+<body>
+<header class="doll-top">
+  <h1>Pacchetto d'onda quantistico</h1>
+  <div class="doll-dati">$i\hbar\,\dfrac{\partial\psi}{\partial t}=-\dfrac{\hbar^2}{2m}\dfrac{\partial^2\psi}{\partial x^2}+V(x)\,\psi \qquad \hbar=m=1$</div>
+</header>
+<main class="doll-main">
+  <section class="doll-vista" id="vista">
+    <div class="doll-legenda" id="legenda"></div>
+  </section>
+  <aside class="doll-pannello" id="pannello"></aside>
+</main>
+<footer class="doll-didascalia" id="didascalia"></footer>
+
+<script>
+// === nucleo numerico: Crank-Nicolson con algoritmo di Thomas ===
+// (1 + i dt H/2) psi^{n+1} = (1 - i dt H/2) psi^n,  H psi_j = -(psi_{j+1} - 2 psi_j + psi_{j-1})/(2 dx^2) + (V_j - i W_j) psi_j
+const XMIN = -80, XMAX = 80, N = 1200;            // punti interni; psi = 0 in XMIN e XMAX
+const dx = (XMAX - XMIN) / (N + 1);
+const X = Float64Array.from({ length: N }, (_, j) => XMIN + (j + 1) * dx);
+const re = new Float64Array(N), im = new Float64Array(N);         // psi = re + i im
+const V = new Float64Array(N), W = new Float64Array(N);           // potenziale reale e assorbente
+const muro = new Uint8Array(N);                                   // 1 = psi forzata a 0
+const cpR = new Float64Array(N), cpI = new Float64Array(N), ivR = new Float64Array(N), ivI = new Float64Array(N);
+const rR = new Float64Array(N), rI = new Float64Array(N), pR = new Float64Array(N), pI = new Float64Array(N);
+let dt = 0.025, tSim = 0, assL = 0, assR = 0;    // tempo e probabilita' assorbita a sinistra/destra
+
+// fattorizzazione di A = 1 + i dt H/2 (diagonale d_j, fuori diagonale -i b): va rifatta se cambiano V, W, dt
+function prepara() {
+  const b = dt / (4 * dx * dx);
+  for (let j = 0; j < N; j++) {
+    let mR = 1, mI = 0;
+    if (!muro[j]) {
+      mR = 1 + dt * W[j] / 2; mI = dt / 2 * (1 / (dx * dx) + V[j]);
+      if (j > 0) { mR -= b * cpI[j - 1]; mI += b * cpR[j - 1]; }    // m = d - a cp_{j-1}, a = -i b
+    }
+    const q = mR * mR + mI * mI; ivR[j] = mR / q; ivI[j] = -mI / q;
+    if (!muro[j] && j < N - 1) { cpR[j] = b * ivI[j]; cpI[j] = -b * ivR[j]; }   // cp = c / m, c = -i b
+    else { cpR[j] = 0; cpI[j] = 0; }
+  }
+}
+function densitaAssorbita() {            // integrali di W |psi|^2 a sinistra e a destra
+  let a = 0, c = 0;
+  for (let j = 0; j < N; j++) if (W[j]) { const p = W[j] * (re[j] * re[j] + im[j] * im[j]); if (X[j] < 0) a += p; else c += p; }
+  return [a * dx, c * dx];
+}
+function passo() {
+  const b = dt / (4 * dx * dx), [a0, c0] = densitaAssorbita();
+  for (let j = 0; j < N; j++) {          // termine noto: (1 - i dt H/2) psi
+    if (muro[j]) { rR[j] = 0; rI[j] = 0; continue; }
+    const sR = (j > 0 ? re[j - 1] : 0) + (j < N - 1 ? re[j + 1] : 0), sI = (j > 0 ? im[j - 1] : 0) + (j < N - 1 ? im[j + 1] : 0);
+    const dR = 1 - dt * W[j] / 2, dI = -dt / 2 * (1 / (dx * dx) + V[j]);
+    rR[j] = dR * re[j] - dI * im[j] - b * sI;
+    rI[j] = dR * im[j] + dI * re[j] + b * sR;
+  }
+  for (let j = 0; j < N; j++) {          // sostituzione in avanti
+    let xR = rR[j], xI = rI[j];
+    if (j > 0 && !muro[j]) { xR -= b * pI[j - 1]; xI += b * pR[j - 1]; }
+    pR[j] = xR * ivR[j] - xI * ivI[j]; pI[j] = xR * ivI[j] + xI * ivR[j];
+  }
+  re[N - 1] = pR[N - 1]; im[N - 1] = pI[N - 1];
+  for (let j = N - 2; j >= 0; j--) {     // sostituzione all'indietro
+    re[j] = pR[j] - (cpR[j] * re[j + 1] - cpI[j] * im[j + 1]);
+    im[j] = pI[j] - (cpR[j] * im[j + 1] + cpI[j] * re[j + 1]);
+  }
+  const [a1, c1] = densitaAssorbita();   // dN/dt = -2 int W|psi|^2  (regola dei trapezi)
+  assL += dt * (a0 + a1); assR += dt * (c0 + c1); tSim += dt;
+}
+// osservabili (somme sulla griglia)
+function prob(xa, xb) { let s = 0; for (let j = 0; j < N; j++) if (X[j] > xa && X[j] < xb) s += re[j] * re[j] + im[j] * im[j]; return s * dx; }
+const norma = () => prob(-Infinity, Infinity);
+function momenti() {                      // <x>, Delta x, <E> (parte reale di <H>, senza W)
+  let n = 0, m1 = 0, m2 = 0, e = 0;
+  for (let j = 0; j < N; j++) {
+    const p = re[j] * re[j] + im[j] * im[j];
+    const lR = ((j < N - 1 ? re[j + 1] : 0) - 2 * re[j] + (j > 0 ? re[j - 1] : 0)) / (dx * dx);
+    const lI = ((j < N - 1 ? im[j + 1] : 0) - 2 * im[j] + (j > 0 ? im[j - 1] : 0)) / (dx * dx);
+    n += p; m1 += X[j] * p; m2 += X[j] * X[j] * p; e += -0.5 * (re[j] * lR + im[j] * lI) + V[j] * p;
+  }
+  const xm = m1 / n; return { xm, dX: Math.sqrt(Math.max(0, m2 / n - xm * xm)), E: e / n };
+}
+function normalizza() { const s = Math.sqrt(norma()); for (let j = 0; j < N; j++) { re[j] /= s; im[j] /= s; } }
+function pacchetto(x0, sigma, k0) {      // |psi|^2 gaussiana di deviazione standard sigma, impulso medio k0
+  for (let j = 0; j < N; j++) {
+    const g = muro[j] ? 0 : Math.exp(-((X[j] - x0) ** 2) / (4 * sigma * sigma));
+    re[j] = g * Math.cos(k0 * X[j]); im[j] = g * Math.sin(k0 * X[j]);
+  }
+  normalizza(); tSim = 0; assL = 0; assR = 0;
+}
+// teoria: trasmissione di una barriera rettangolare e di un gradino (onda piana, E = k^2/2)
+function Tbarriera(E, V0, a) {
+  if (V0 <= 0 || a <= 0) return 1;
+  if (Math.abs(E - V0) < 1e-9) return 1 / (1 + V0 * a * a / 2);
+  if (E < V0) { const kp = Math.sqrt(2 * (V0 - E)), s = Math.sinh(kp * a); return 1 / (1 + V0 * V0 * s * s / (4 * E * (V0 - E))); }
+  const q = Math.sqrt(2 * (E - V0)), s = Math.sin(q * a); return 1 / (1 + V0 * V0 * s * s / (4 * E * (E - V0)));
+}
+function Tgradino(E, V0) { if (E <= V0) return 0; const k = Math.sqrt(2 * E), q = Math.sqrt(2 * (E - V0)); return 4 * k * q / ((k + q) ** 2); }
+// media di T(k^2/2) sulla distribuzione degli impulsi del pacchetto |phi(k)|^2 ~ exp(-2 sigma^2 (k-k0)^2)
+function Tmedia(Tk, k0, sigma) {
+  const sk = 1 / (2 * sigma); let s = 0, w = 0;
+  for (let i = -300; i <= 300; i++) { const k = k0 + 5 * sk * i / 300; if (k <= 0) continue;
+    const p = Math.exp(-((k - k0) ** 2) / (2 * sk * sk)); s += p * Tk(k * k / 2); w += p; }
+  return w ? s / w : 0;
+}
+// === fine nucleo ===
+
+const C = Doll.col;
+const XFIS = 60;                 // regione fisica |x| < 60; oltre: strato assorbente (o parete)
+const W_MAX = 1.5;               // intensita' del potenziale assorbente W = W_MAX ((|x|-60)/20)^2
+const X0_URTO = -25;             // partenza del pacchetto negli urti
+const st = { pot: "barriera", stato: "pacchetto", bordi: "ass", k0: 2, sigma: 4, V0: 1.5, a: 2, om: 0.5, Lw: 40,
+             na: 1, nb: 2, vel: 6, reImm: true };
+let rho0 = new Float64Array(N);  // |psi(x,0)|^2 per il confronto
+let vista = [-XFIS, XFIS], rhoMax = 1, Emax = 1, E0 = 0, aEff = 0, xl = 0, xr = 0;
+const staz = () => st.stato === "staz";
+const urto = () => ["libero", "barriera", "gradino"].includes(st.pot);
+
+// ---------- costruzione del potenziale e dello stato iniziale ----------
+function costruisci() {
+  dt = st.pot === "buca" ? 0.05 : 0.025;           // nella buca le energie sono piccole: passo piu' lungo
+  let nb = 0;
+  for (let j = 0; j < N; j++) {
+    const x = X[j]; V[j] = 0; W[j] = 0; muro[j] = 0;
+    if (st.pot === "barriera" && x >= 0 && x < st.a) { V[j] = st.V0; nb++; }
+    if (st.pot === "gradino" && x >= 0) V[j] = st.V0;
+    if (st.pot === "armonico") V[j] = 0.5 * st.om * st.om * x * x;
+    if (st.pot === "buca" && Math.abs(x) >= st.Lw / 2) muro[j] = 1;
+    if (urto() && Math.abs(x) > XFIS) { if (st.bordi === "ass") W[j] = W_MAX * ((Math.abs(x) - XFIS) / (XMAX - XFIS)) ** 2; else muro[j] = 1; }
+  }
+  aEff = nb * dx;                                      // larghezza effettiva della barriera sulla griglia
+  // pareti effettive della buca (primo e ultimo punto con psi = 0)
+  if (st.pot === "buca") { const i0 = muro.indexOf(0), i1 = muro.lastIndexOf(0); xl = X[i0] - dx; xr = X[i1] + dx; }
+  prepara();
+}
+const Lef = () => xr - xl;
+function energiaN(n) { return st.pot === "buca" ? n * n * Math.PI * Math.PI / (2 * Lef() ** 2) : st.om * (n + 0.5); }
+function autofunzione(n, x) {                          // autofunzioni normalizzate (analitiche)
+  if (st.pot === "buca") return x <= xl || x >= xr ? 0 : Math.sqrt(2 / Lef()) * Math.sin(n * Math.PI * (x - xl) / Lef());
+  const xi = Math.sqrt(st.om) * x; let h0 = 1, h1 = 2 * xi;          // polinomi di Hermite per ricorrenza
+  if (n === 0) h1 = 1; else for (let k = 1; k < n; k++) { const h2 = 2 * xi * h1 - 2 * k * h0; h0 = h1; h1 = h2; }
+  let fatt = 1; for (let k = 2; k <= n; k++) fatt *= k;
+  return Math.pow(st.om / Math.PI, 0.25) / Math.sqrt(2 ** n * fatt) * h1 * Math.exp(-xi * xi / 2);
+}
+const x0Arm = () => -Math.sqrt(8) / st.om;             // partenza nell'oscillatore: energia classica 4
+function riparti() {
+  costruisci();
+  if (staz()) {
+    for (let j = 0; j < N; j++) { re[j] = muro[j] ? 0 : autofunzione(st.na, X[j]) + autofunzione(st.nb, X[j]); im[j] = 0; }
+    normalizza(); tSim = 0; assL = 0; assR = 0;
+  } else {
+    const x0 = st.pot === "armonico" ? x0Arm() : st.pot === "buca" ? -st.Lw / 4 : X0_URTO;
+    const sg = st.pot === "buca" ? Math.min(st.sigma, st.Lw / 10) : st.sigma;
+    pacchetto(x0, sg, st.k0);
+  }
+  for (let j = 0; j < N; j++) rho0[j] = re[j] * re[j] + im[j] * im[j];
+  // finestra e scale fisse (cosi' si vede davvero il pacchetto allargarsi o dividersi)
+  const sgR = st.pot === "buca" ? Math.min(st.sigma, st.Lw / 10) : st.sigma;
+  if (urto()) vista = [-XFIS, XFIS];
+  else if (st.pot === "buca") vista = [-st.Lw / 2 * 1.12, st.Lw / 2 * 1.12];
+  else { const R = staz() ? Math.sqrt(2 * energiaN(6)) / st.om : Math.abs(x0Arm()) * 1.35 + 2 * sgR; vista = [-R, R]; }
+  rhoMax = 1.12 * Math.max(...rho0);
+  E0 = momenti().E;
+  Emax = 1.45 * Math.max(E0, st.pot === "barriera" || st.pot === "gradino" ? st.V0 : 0, 0.3);
+  aggiornaTesti(); disegna();
+}
+function avanza(passi) { for (let i = 0; i < passi; i++) passo(); }
+function avanzaFinoA(t) { while (tSim < t - 1e-9) passo(); }
+
+// ---------- disegno ----------
+const cv = Doll.canvas(), ctx = cv.ctx;
+const virgola = t => String(t).replace(/\./g, ",").replace(/^-/, "−");
+const f = (v, d = 3) => virgola(v.toFixed(d));
+function riquadro(x0, y0, w, h, xa, xb) { return { x0, y0, w, h, X: x => x0 + (x - xa) / (xb - xa) * w }; }
+function tacche(a, b, n) { const s = (b - a) / n, p = 10 ** Math.floor(Math.log10(s)), m = s / p, d = (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p;
+  const o = []; for (let v = Math.ceil(a / d) * d; v <= b + 1e-9; v += d) o.push(+v.toFixed(8)); return o; }
+function asseX(R, yAsse) {
+  ctx.fillStyle = C.grigio; ctx.font = "12px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+  ctx.strokeStyle = "#eeece6"; ctx.lineWidth = 1;
+  for (const x of tacche(vista[0], vista[1], 8)) {
+    ctx.beginPath(); ctx.moveTo(R.X(x), R.y0); ctx.lineTo(R.X(x), R.y0 + R.h); ctx.stroke();
+    ctx.fillText(virgola(String(x)), R.X(x), yAsse + 4);
+  }
+  ctx.textAlign = "right"; ctx.fillText("x", R.x0 + R.w, yAsse + 19);
+}
+function polilinea(R, Y, val, colore, sp, tratt) {
+  ctx.strokeStyle = colore; ctx.lineWidth = sp; ctx.setLineDash(tratt || []); ctx.beginPath(); let primo = true;
+  for (let j = 0; j < N; j++) { if (X[j] < vista[0] || X[j] > vista[1]) continue; const px = R.X(X[j]), py = Y(val(j));
+    primo ? ctx.moveTo(px, py) : ctx.lineTo(px, py); primo = false; }
+  ctx.stroke(); ctx.setLineDash([]);
+}
+function riempi(R, Y, val, y0, colore) {
+  ctx.fillStyle = colore; ctx.beginPath(); let primo = true, ul = 0;
+  for (let j = 0; j < N; j++) { if (X[j] < vista[0] || X[j] > vista[1]) continue; const px = R.X(X[j]);
+    if (primo) { ctx.moveTo(px, y0); primo = false; } ctx.lineTo(px, Y(val(j))); ul = px; }
+  ctx.lineTo(ul, y0); ctx.closePath(); ctx.fill();
+}
+function pareti(R, ya, yb) {             // zone con psi = 0, tratteggiate
+  ctx.save(); ctx.beginPath(); ctx.rect(R.x0, ya, R.w, yb - ya); ctx.clip();
+  let j = 0;
+  while (j < N) {
+    if (!muro[j] || X[j] < vista[0] - dx || X[j] > vista[1] + dx) { j++; continue; }
+    let k = j; while (k < N && muro[k]) k++;
+    const a = Math.max(R.x0, R.X(X[j] - dx / 2)), b = Math.min(R.x0 + R.w, R.X(X[k - 1] + dx / 2));
+    ctx.fillStyle = "#e9e7e1"; ctx.fillRect(a, ya, b - a, yb - ya);
+    ctx.save(); ctx.beginPath(); ctx.rect(a, ya, b - a, yb - ya); ctx.clip();          // tratteggio solo nella parete
+    ctx.strokeStyle = "#a9a7a0"; ctx.lineWidth = 1; ctx.beginPath();
+    for (let s = a - (yb - ya); s < b; s += 9) { ctx.moveTo(s, yb); ctx.lineTo(s + (yb - ya), ya); }
+    ctx.stroke(); ctx.restore(); ctx.strokeStyle = C.testo; ctx.lineWidth = 2; ctx.beginPath();
+    if (a > R.x0 + 1) { ctx.moveTo(a, ya); ctx.lineTo(a, yb); } if (b < R.x0 + R.w - 1) { ctx.moveTo(b, ya); ctx.lineTo(b, yb); } ctx.stroke();
+    j = k;
+  }
+  ctx.restore();
+}
+function etichetta(t, x, y, colore, alline = "left") {
+  ctx.font = "13px sans-serif"; const w = ctx.measureText(t).width, x0 = alline === "left" ? x : alline === "right" ? x - w : x - w / 2;
+  ctx.fillStyle = "rgba(255,255,255,.85)"; ctx.fillRect(x0 - 3, y - 9, w + 6, 18);
+  ctx.fillStyle = colore; ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(t, x0, y);
+}
+function asseEnergia(R, YE, emax, lato) {
+  ctx.fillStyle = C.grigio; ctx.font = "12px sans-serif"; ctx.textBaseline = "middle";
+  const xa = lato === "dx" ? R.x0 + R.w : R.x0;
+  ctx.textAlign = lato === "dx" ? "left" : "right";
+  for (const e of tacche(0, emax, 5)) { ctx.fillText(virgola(String(e)), xa + (lato === "dx" ? 6 : -6), YE(e)); }
+  ctx.save(); ctx.translate(lato === "dx" ? xa + 44 : xa - 40, YE(emax / 2)); ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = "center"; ctx.fillText("energia", 0, 0); ctx.restore();
+}
+
+function disegna() {
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.w, cv.h);
+  if (staz()) disegnaStazionari(); else disegnaPacchetto();
+  aggiornaLetture();
+}
+function disegnaPacchetto() {
+  const top = cv.w < 600 ? 70 : 34;                         // schermi stretti: legenda su due righe
+  const R = riquadro(26, top, cv.w - 26 - 60, cv.h - top - 44, vista[0], vista[1]);
+  const yb = R.y0 + R.h * 0.55, hs = yb - R.y0 - 6;          // linea di base: |psi|^2 = 0, V = 0
+  const Yr = r => yb - Math.min(r / rhoMax, 1.02) * hs;     // densita' di probabilita'
+  const Yp = p => yb - Math.max(-1.05, Math.min(1.05, p / Math.sqrt(rhoMax))) * hs * 0.8;   // Re psi
+  const YE = e => yb - Math.min(e / Emax, 1.02) * hs;       // energia
+  asseX(R, R.y0 + R.h);
+  ctx.strokeStyle = "#b9b7b0"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(R.x0, yb); ctx.lineTo(R.x0 + R.w, yb); ctx.stroke();
+  asseEnergia(R, YE, Emax, "dx");
+  // potenziale
+  ctx.save(); ctx.beginPath(); ctx.rect(R.x0, R.y0, R.w, R.h); ctx.clip();          // V oltre la scala: tagliato
+  const YV = e => yb - e / Emax * hs;
+  if (urto()) riempi(R, YV, j => V[j], yb, "rgba(107,107,112,.16)");     // barriera/gradino pieni, parabola solo linea
+  polilinea(R, YV, j => V[j], C.grigio, 1.6); ctx.restore();
+  pareti(R, R.y0, R.y0 + R.h);
+  // |psi(x,0)|^2 tratteggiata, poi |psi|^2 e Re psi
+  polilinea(R, Yr, j => rho0[j], "rgba(107,107,112,.7)", 1.2, [4, 4]);
+  if (st.reImm) polilinea(R, Yp, j => re[j], "rgba(107,70,193,.75)", 1.1);
+  riempi(R, Yr, j => re[j] * re[j] + im[j] * im[j], yb, "rgba(43,108,176,.22)");
+  polilinea(R, Yr, j => re[j] * re[j] + im[j] * im[j], C.blu, 2.2);
+  // <E> e V0
+  ctx.strokeStyle = C.arancio; ctx.lineWidth = 1.6; ctx.setLineDash([7, 5]);
+  ctx.beginPath(); ctx.moveTo(R.x0, YE(E0)); ctx.lineTo(R.x0 + R.w, YE(E0)); ctx.stroke(); ctx.setLineDash([]);
+  etichetta(`⟨E⟩ = ${f(E0, 2)}`, R.x0 + 8, YE(E0) - 12, C.arancio);
+  if (st.pot === "barriera" || st.pot === "gradino")
+    etichetta(`V₀ = ${f(st.V0, 2)}`, R.X(st.pot === "barriera" ? st.a : 0) + 6, YE(st.V0) - 12, C.grigio);
+  if (st.pot === "armonico") etichetta(`ω = ${f(st.om, 2)}`, R.x0 + 8, R.y0 + 12, C.grigio);
+  etichetta(`t = ${f(tSim, 1)}`, R.x0 + R.w - 6, R.y0 + R.h - 14, C.testo, "right");
+}
+function disegnaStazionari() {
+  const T0 = cv.w < 600 ? 74 : 34;                          // spazio per la legenda su schermi stretti
+  const mdx = cv.w < 600 ? 62 : 130;                         // margine destro per le etichette dei livelli
+  const R = riquadro(66, T0, cv.w - 66 - mdx, 0, vista[0], vista[1]);
+  const hS = Math.round((cv.h - T0) * 0.56) - 30, y0b = T0 + hS + 50, hB = cv.h - y0b - 40;
+  // --- sopra: livelli E_n con le autofunzioni disegnate sul proprio livello ---
+  const ns = st.pot === "buca" ? [1, 2, 3, 4, 5] : [0, 1, 2, 3, 4];
+  const En = ns.map(energiaN), dEmin = st.pot === "buca" ? En[1] - En[0] : st.om;
+  const eTop = En[4] + 0.85 * (st.pot === "buca" ? En[4] - En[3] : st.om);
+  const YE = e => T0 + hS - e / eTop * hS;
+  R.y0 = T0; R.h = hS;
+  ctx.fillStyle = C.testo; ctx.font = "600 13px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+  ctx.fillText(st.pot === "buca" ? "Livelli della buca infinita: Eₙ ∝ n²" : "Livelli dell'oscillatore: Eₙ = ħω(n + ½)", R.x0, T0 - 6);
+  ctx.strokeStyle = "#b9b7b0"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(R.x0, YE(0)); ctx.lineTo(R.x0 + R.w, YE(0)); ctx.stroke();
+  asseEnergia(R, YE, eTop, "sx");
+  ctx.save(); ctx.beginPath(); ctx.rect(R.x0, R.y0 - 4, R.w, R.h + 4); ctx.clip();
+  if (st.pot === "armonico") { riempi(R, YE, j => V[j], YE(0), "rgba(107,107,112,.12)"); polilinea(R, YE, j => V[j], C.grigio, 1.6); }
+  ctx.restore();
+  pareti(R, R.y0, R.y0 + R.h);
+  let amp = 0; for (const n of ns) for (let j = 0; j < N; j += 2) amp = Math.max(amp, Math.abs(autofunzione(n, X[j])));
+  const s = 0.42 * dEmin / amp;                               // scala delle autofunzioni
+  ns.forEach((n, i) => {
+    const sel = n === st.na ? C.blu : n === st.nb ? C.arancio : null, col = sel || "rgba(107,107,112,.75)";
+    // livello: tra i punti di inversione classici (oscillatore) o tra le pareti (buca)
+    const xt = st.pot === "buca" ? [xl, xr] : [-Math.sqrt(2 * En[i]) / st.om, Math.sqrt(2 * En[i]) / st.om];
+    ctx.strokeStyle = "rgba(107,107,112,.5)"; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(R.X(xt[0]), YE(En[i])); ctx.lineTo(R.X(xt[1]), YE(En[i])); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = col; ctx.lineWidth = sel ? 2.4 : 1.4; ctx.beginPath(); let primo = true;
+    for (let j = 0; j < N; j++) { if (X[j] < vista[0] || X[j] > vista[1]) continue;
+      const px = R.X(X[j]), py = YE(En[i] + s * autofunzione(n, X[j])); primo ? ctx.moveTo(px, py) : ctx.lineTo(px, py); primo = false; }
+    ctx.stroke();
+    etichetta(cv.w < 600 ? `n = ${n}` : `n = ${n}   E = ${f(En[i], 3)}`, R.x0 + R.w + 10, YE(En[i]), sel ? col : C.grigio);
+  });
+  // --- sotto: |psi(x,t)|^2 della sovrapposizione ---
+  const Rb = riquadro(66, y0b, cv.w - 66 - mdx, hB, vista[0], vista[1]);
+  const yb = y0b + hB, Yr = r => yb - Math.min(r / rhoMax, 1.02) * (hB - 4);
+  ctx.fillStyle = C.testo; ctx.font = "600 13px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+  ctx.fillText(`Sovrapposizione (φ${pedice(st.na)} + φ${pedice(st.nb)})/√2: |ψ(x,t)|²`, Rb.x0, y0b - 8);
+  asseX(Rb, yb);
+  pareti(Rb, y0b, yb);
+  ctx.strokeStyle = "#b9b7b0"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(Rb.x0, yb); ctx.lineTo(Rb.x0 + Rb.w, yb); ctx.stroke();
+  polilinea(Rb, Yr, j => rho0[j], "rgba(107,107,112,.7)", 1.2, [4, 4]);
+  riempi(Rb, Yr, j => re[j] * re[j] + im[j] * im[j], yb, "rgba(43,108,176,.22)");
+  polilinea(Rb, Yr, j => re[j] * re[j] + im[j] * im[j], C.blu, 2.2);
+  const { xm } = momenti();
+  ctx.strokeStyle = C.verde; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(Rb.X(xm), y0b); ctx.lineTo(Rb.X(xm), yb); ctx.stroke();
+  etichetta("⟨x⟩", Rb.X(xm) + 5, y0b + 10, C.verde);
+  etichetta(`t = ${f(tSim, 1)}`, Rb.x0 + Rb.w + 10, yb - 10, C.testo);
+}
+const pedice = n => "₀₁₂₃₄₅₆₇₈₉"[n];
+
+// ---------- pannello ----------
+const pan = document.getElementById("pannello");
+const gruppo = () => { const d = document.createElement("div"); d.style.cssText = "display:flex;flex-direction:column;gap:14px"; pan.appendChild(d); return d; };
+const mostraEl = (el, si) => (el.style.display = si ? "" : "none");
+const ctrl = s => s.el.parentElement;                     // il riquadro .doll-ctrl di uno slider/select
+
+Doll.titoletto(null, "Situazione");
+const sPot = Doll.scelta(null, { label: "potenziale", value: st.pot,
+  opzioni: [["libero", "libero (V = 0)"], ["barriera", "barriera rettangolare"], ["gradino", "gradino"], ["armonico", "oscillatore armonico"], ["buca", "buca infinita"]],
+  onChange: v => { st.pot = v; if (!["armonico", "buca"].includes(v)) st.stato = "pacchetto";
+    if (v === "armonico") { st.k0 = 0; st.sigma = Math.round(4 / Math.sqrt(2 * st.om)) / 4; }   // stato coerente
+    sincronizza(); riparti(); } });
+const sStato = Doll.scelta(null, { label: "stato iniziale", value: st.stato,
+  opzioni: [["pacchetto", "pacchetto gaussiano"], ["staz", "stati stazionari (buca, oscillatore)"]],
+  onChange: v => { st.stato = v; if (v === "staz" && !["armonico", "buca"].includes(st.pot)) { st.pot = "buca"; st.Lw = 10; }
+    if (v === "staz") { st.na = st.pot === "buca" ? 1 : 0; st.nb = st.na + 1; } sincronizza(); riparti(); } });
+const anim = Doll.animazione(() => { avanza(st.vel); disegna(); });
+Doll.bottone(null, "↺ Da capo", () => riparti());
+
+Doll.titoletto(null, "Parametri");
+const gPac = gruppo();
+const sK = Doll.slider(gPac, { label: "impulso $k_0$", min: 0, max: 3, step: 0.05, value: st.k0, fmt: v => f(v, 2), onInput: v => { st.k0 = v; riparti(); } });
+const sS = Doll.slider(gPac, { label: "larghezza $\\sigma$", min: 0.5, max: 6, step: 0.25, value: st.sigma, fmt: v => f(v, 2), onInput: v => { st.sigma = v; riparti(); } });
+const gV0 = gruppo();
+const sV0 = Doll.slider(gV0, { label: "altezza $V_0$", min: 0, max: 5, step: 0.05, value: st.V0, fmt: v => f(v, 2), onInput: v => { st.V0 = v; riparti(); } });
+const sA = Doll.slider(gV0, { label: "larghezza $a$", min: 0.2, max: 6, step: 0.1, value: st.a, fmt: v => f(v, 1), onInput: v => { st.a = v; riparti(); } });
+const sOm = Doll.slider(gruppo(), { label: "pulsazione $\\omega$", min: 0.2, max: 1, step: 0.05, value: st.om, fmt: v => f(v, 2), onInput: v => { st.om = v; riparti(); } });
+const sL = Doll.slider(gruppo(), { label: "larghezza buca $L$", min: 8, max: 100, step: 1, value: st.Lw, fmt: v => f(v, 0), onInput: v => { st.Lw = v; riparti(); } });
+const gN = gruppo();
+const sNa = Doll.slider(gN, { label: "primo stato $n_a$", min: 1, max: 5, step: 1, value: st.na, onInput: v => { st.na = v; riparti(); } });
+const sNb = Doll.slider(gN, { label: "secondo stato $n_b$", min: 1, max: 5, step: 1, value: st.nb, onInput: v => { st.nb = v; riparti(); } });
+
+Doll.titoletto(null, "Letture");
+function letturaVar() {                    // riga di lettura con etichetta che cambia con la situazione
+  const set = Doll.lettura(null, ""), el = pan.lastElementChild; let et = null;
+  return { el, set: (e, v) => { el.style.display = ""; if (e !== et) { et = e; el.firstChild.innerHTML = e; Doll.tex(el.firstChild); } set(v); },
+           nascondi: () => (el.style.display = "none") };
+}
+const L = Array.from({ length: 6 }, letturaVar);
+
+Doll.titoletto(null, "Opzioni");
+const sBordi = Doll.scelta(null, { label: "bordi a $|x| = 60$", value: st.bordi, opzioni: [["ass", "assorbenti"], ["muro", "pareti rigide"]],
+  onChange: v => { st.bordi = v; riparti(); } });
+const sVel = Doll.slider(null, { label: "velocità (passi per fotogramma)", min: 1, max: 30, step: 1, value: st.vel, onInput: v => (st.vel = v) });
+const sRe = Doll.scelta(null, { label: "curve", value: "si", opzioni: [["si", "|ψ|² e Re ψ"], ["no", "solo |ψ|²"]],
+  onChange: v => { st.reImm = v === "si"; aggiornaTesti(); disegna(); } });
+const nota = document.createElement("p"); nota.className = "doll-nota"; pan.appendChild(nota);
+
+// mostra solo i controlli che servono e allinea gli slider allo stato st
+function sincronizza() {
+  sPot.el.value = st.pot; sStato.el.value = st.stato; sBordi.el.value = st.bordi;
+  mostraEl(gPac, !staz()); mostraEl(gV0, st.pot === "barriera" || st.pot === "gradino"); mostraEl(ctrl(sA), st.pot === "barriera");
+  mostraEl(ctrl(sOm).parentElement, st.pot === "armonico"); mostraEl(ctrl(sL).parentElement, st.pot === "buca"); mostraEl(gN, staz());
+  mostraEl(ctrl(sBordi), urto()); mostraEl(ctrl(sStato), true);
+  const n0 = st.pot === "buca" ? 1 : 0;
+  for (const s of [sNa, sNb]) { s.el.min = n0; s.el.max = n0 + 4; }
+  // .set() richiamerebbe onInput -> riparti() a ogni slider: scriviamo i valori direttamente
+  [[sK, st.k0], [sS, st.sigma], [sV0, st.V0], [sA, st.a], [sOm, st.om], [sL, st.Lw], [sNa, st.na], [sNb, st.nb], [sVel, st.vel]]
+    .forEach(([s, v]) => (s.el.value = v));
+  aggiornaEtichette();
+}
+// aggiorna il numero in grassetto degli slider senza far ripartire la simulazione
+const formati = new Map([[sK, v => f(v, 2)], [sS, v => f(v, 2)], [sV0, v => f(v, 2)], [sA, v => f(v, 1)], [sOm, v => f(v, 2)],
+  [sL, v => f(v, 0)], [sNa, v => String(v)], [sNb, v => String(v)], [sVel, v => String(v)]]);
+function aggiornaEtichette() { for (const [s, fm] of formati) ctrl(s).querySelector("b").textContent = fm(+s.el.value); }
+
+function aggiornaTesti() {
+  const G = document.getElementById("legenda"), leg = (c, t, tr) => `<i ${tr ? 'class="tratto" style="border-color:' + c + '"' : 'style="background:' + c + '"'}></i>${t} &nbsp; `;
+  if (staz()) G.innerHTML = leg(C.blu, "$\\varphi_{n_a}$") + leg(C.arancio, "$\\varphi_{n_b}$") + leg(C.verde, "$\\langle x\\rangle$") + leg(C.grigio, "$t=0$", 1);
+  else G.innerHTML = leg(C.blu, "$|\\psi|^2$") + (st.reImm ? leg(C.viola, "$\\mathrm{Re}\\,\\psi$") : "") + leg(C.grigio, "$V(x)$") +
+    leg(C.arancio, "$\\langle E\\rangle$", 1) + leg(C.grigio, "$|\\psi(x,0)|^2$", 1);
+  Doll.tex(G);
+  nota.textContent = staz() ? "Gli stati stazionari non cambiano |ψ|²: la loro somma sì, con periodo 2πħ/(E_b − E_a)."
+    : urto() ? "Il pacchetto parte da x = −25. T e R si leggono quando il pacchetto si è diviso."
+    : st.pot === "armonico" ? "Con σ = 1/√(2ω) il pacchetto è uno stato coerente: oscilla senza allargarsi."
+    : "Il pacchetto rimbalza sulle pareti e interferisce con se stesso.";
+}
+function aggiornaLetture() {      // L[0..3]: letture della situazione; L[4], L[5]: tempo e norma
+  const n = norma(), m = momenti(), nasc = k => { for (let i = k; i < 4; i++) L[i].nascondi(); };
+  L[4].set("tempo $t$", f(tSim, 1));
+  L[5].set(urto() && st.bordi === "ass" ? "norma (griglia + assorbita)" : "norma $\\int|\\psi|^2dx$",
+           urto() && st.bordi === "ass" ? f(n + assL + assR, 4) : f(n, 4));
+  if (staz()) {
+    const Ea = energiaN(st.na), Eb = energiaN(st.nb);
+    L[0].set("$E_{n_a},\\ E_{n_b}$", `${f(Ea, 3)}; ${f(Eb, 3)}`);
+    L[1].set("periodo $2\\pi/|E_b-E_a|$", st.na === st.nb ? "∞ (stazionario)" : f(2 * Math.PI / Math.abs(Eb - Ea), 1));
+    L[2].set("$\\langle x\\rangle$", f(m.xm, 2)); nasc(3); return;
+  }
+  if (st.pot === "barriera" || st.pot === "gradino") {
+    const xb = st.pot === "barriera" ? aEff : 0;
+    const T = prob(xb, Infinity) + assR, Rr = prob(-Infinity, 0) + assL;
+    const Tk = st.pot === "barriera" ? E => Tbarriera(E, st.V0, aEff) : E => Tgradino(E, st.V0);
+    L[0].set("$T$ simulata ($R$)", `${f(T, 3)} (${f(Rr, 3)})`);
+    L[1].set("$T$ teoria, media sul pacchetto", f(Tmedia(Tk, st.k0, st.sigma), 3));
+    L[2].set("$T$ onda piana $E=k_0^2/2$", f(Tk(st.k0 * st.k0 / 2), 3));
+    L[3].set("$\\langle E\\rangle$ e $V_0$", `${f(E0, 3)} ${E0 < st.V0 ? "&lt;" : "&gt;"} ${f(st.V0, 2)}`);
+  } else if (st.pot === "libero") {
+    const sT = st.sigma * Math.sqrt(1 + (tSim / (2 * st.sigma * st.sigma)) ** 2);
+    L[0].set("$\\Delta x$ simulata", f(m.dX, 3));
+    if (st.cela) L[1].set("$\\Delta x$ teoria", "?");   // nel passo-domanda la formula darebbe la risposta
+    else L[1].set("$\\Delta x$ teoria $\\sigma\\sqrt{1+(t/2\\sigma^2)^2}$", f(sT, 3));
+    L[2].set("$\\langle E\\rangle$ (teoria $\\tfrac{k_0^2}{2}+\\tfrac{1}{8\\sigma^2}$)",
+             `${f(E0, 3)} (${f(st.k0 ** 2 / 2 + 1 / (8 * st.sigma ** 2), 3)})`); nasc(3);
+  } else if (st.pot === "armonico") {
+    const x0 = x0Arm(), xc = x0 * Math.cos(st.om * tSim) + st.k0 / st.om * Math.sin(st.om * tSim);
+    L[0].set("$\\langle x\\rangle$ simulata", f(m.xm, 2)); L[1].set("$x(t)$ classica", f(xc, 2));
+    L[2].set("$\\Delta x$", f(m.dX, 3)); L[3].set("$\\langle E\\rangle$", f(E0, 3));
+  } else {
+    L[0].set("$\\langle E\\rangle$", f(m.E, 3)); L[1].set("$E_1=\\pi^2/2L^2$", f(energiaN(1), 4)); nasc(2);
+  }
+}
+window.addEventListener("resize", () => disegna());
+// la vista cambia misura anche senza resize della finestra (es. KaTeX in alto): Doll.canvas la svuota, si ridisegna
+new ResizeObserver(() => disegna()).observe(document.getElementById("vista"));
+
+// ---------- percorso guidato (ogni passo prepara lo stato e lo fa evolvere fino al momento utile) ----------
+// "Prova tu": nell'oscillatore lo stato fondamentale ha |phi_0|^2 ~ exp(-omega x^2) = exp(-x^2/(2 sigma^2)), quindi
+// sigma = 1/sqrt(2 omega) (SymPy): un pacchetto gaussiano con questa larghezza (stato coerente, qualunque x0 e k0)
+// oscilla senza allargarsi; con un'altra sigma Delta x "respira". Con omega = 0,5: sigma = 1.
+// Tolleranza 0,13 = mezzo passo dello slider di sigma (0,25): per ogni omega c'e' esattamente un valore giusto.
+// Controllo numerico (un periodo, x0 = -5,66): sigma = 1 -> Delta x tra 0,91 e 1,05 (il minimo della variazione;
+// il resto e' dispersione della griglia a k ~ 2,8: fermo al centro resta 1,000); sigma = 2 -> tra 0,56 e 2,01.
+const compito = Doll.bersaglio(null, { testo: "regola $\\sigma$ finché il pacchetto non si allarga più", ok: "Stato coerente: $\\sigma=1/\\sqrt{2\\omega}$",
+  verifica: () => st.pot === "armonico" && !staz() && Math.abs(st.sigma - 1 / Math.sqrt(2 * st.om)) < 0.13 });
+pan.prepend(compito.el);                                        // in cima al pannello, ben visibile
+function scenario(o, tFine, prova = false) {
+  compito.mostra(prova); st.cela = false; Object.assign(st, o); sincronizza(); riparti(); if (tFine) { avanzaFinoA(tFine); disegna(); }
+}
+Doll.guida([
+  // prevedi: il pacchetto a t = 0, simulazione ferma (la risposta si vede solo facendolo evolvere)
+  { testo: "Pacchetto libero, $V=0$: col tempo si allarga? Prevedi, poi Avanti",
+    applica: () => { scenario({ pot: "libero", stato: "pacchetto", bordi: "ass", k0: 1, sigma: 2, vel: 4, cela: true }, 0); anim.pausa(); } },
+  { testo: "Sì: avanza a velocità $k_0$ e si allarga",
+    applica: () => scenario({ pot: "libero", stato: "pacchetto", bordi: "ass", k0: 1, sigma: 2, vel: 4 }, 25) },
+  { testo: "Barriera con $E>V_0$: una parte viene comunque riflessa",
+    applica: () => scenario({ pot: "barriera", stato: "pacchetto", bordi: "ass", k0: 2, sigma: 4, V0: 1.5, a: 2, vel: 6 }, 22) },
+  { testo: "$E\\lt V_0$: effetto tunnel, una parte attraversa la barriera",
+    applica: () => scenario({ pot: "barriera", stato: "pacchetto", bordi: "ass", k0: 1.5, sigma: 4, V0: 2, a: 1, vel: 6 }, 30) },
+  { testo: "Buca infinita: livelli $E_n\\propto n^2$, la somma di due stati oscilla",
+    applica: () => scenario({ pot: "buca", stato: "staz", Lw: 10, na: 1, nb: 2, vel: 4 }, 0) },
+  { testo: "Prova tu: trova $\\sigma$ con cui il pacchetto non si allarga",
+    applica: () => scenario({ pot: "armonico", stato: "pacchetto", k0: 0, sigma: 2, om: 0.5, vel: 3 }, 3, true) },
+]);
+Doll.pronto();
+</script>
+</body>
+</html>

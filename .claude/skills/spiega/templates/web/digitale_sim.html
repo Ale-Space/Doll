@@ -1,0 +1,265 @@
+<!doctype html>
+<!--
+TEMPLATE WEB: circuito digitale SIMULATO (DigitalJS). Elettronica dei sistemi digitali, Calcolatori:
+qualunque rete logica descritta in JSON viene disegnata (impaginazione automatica ELK) e simulata
+porta per porta: i fili si colorano col valore logico, gli ingressi (Button) si cliccano nel disegno.
+Esempio: contatore sincrono a 2 bit con abilitazione EN e reset asincrono RST.
+  Q0+ = Q0 xor EN,   Q1+ = Q1 xor (Q0 and EN)   (verificato: con EN = 1 conta 0,1,2,3,0,...;
+  con EN = 0 lo stato resta fermo; RST = 1 porta subito Q1Q0 = 00 senza aspettare il clock).
+Pannello: fronte di clock a mano, Play = clock automatico (2 fronti/s), EN, reset, letture;
+in basso il diagramma temporale (un tratto per fronte) disegnato su canvas.
+Guida: prevedi -> osserva -> spiega (passo 4 chiede se con EN = 0 i fronti cambiano N, passo 5 lo
+mostra), ultimo passo "Prova tu" con Doll.bersaglio (N = 2 e poi EN = 0).
+
+Quando usarlo al posto di digitale.html: quando conta la SIMULAZIONE vera (reti più grandi,
+sommatori, mux, registri, contatori, memorie, FSM, sottocircuiti): basta scrivere il JSON.
+digitale.html resta migliore per una porta disegnata "da libro" o per i diagrammi WaveDrom.
+
+COME ADATTARLO
+- Cambia CIRCUITO: devices {id: {type, label, ...}} e connectors [{from:{id,port}, to:{id,port}}].
+  Tipi utili: Button (ingresso cliccabile), Lamp (uscita a LED), NumEntry/NumDisplay (bus, attr.
+  bits e numbase "dec"/"hex"/"bin"), Constant {constant:"101"}, Not, And/Or/Nand/Nor/Xor/Xnor
+  (inputs: N, porte in1..inN, uscita out), Mux {bits:{in,sel}}, Dff {polarity:{clock:true,
+  arst:true, enable:true}, initial:"0"} (porte in, clk, arst, en; uscita out), Addition
+  {bits:{in1,in2,out}}, BusGroup/BusUngroup {groups:[1,1]} (in0 = bit meno significativo),
+  FSM, Memory, Subcircuit (elenco completo: README di digitaljs 0.14.2, "Device types").
+  Le porte devono avere la stessa larghezza in bit ai due capi del filo.
+- Gli id dei Button sono quelli che usi con imposta(id, 0/1); le uscite si leggono con leggi(id).
+- assesta() fa girare la simulazione finché non ci sono più eventi: usalo dopo ogni imposta()
+  nei passi della guida, così ogni passo imposta lo stato in modo completo e deterministico.
+- Per uno stato iniziale preciso dei flip-flop: reset asincrono (arst) e poi N fronti (vedi vaiA).
+- Colori: le regole CSS qui sotto rimappano i colori di DigitalJS sulla palette Doll
+  (1 = arancio, 0 = grigio, indefinito = tratteggio chiaro), come in digitale.html.
+- Il disegno è "fisso" (paper.fixed(true)): niente trascinamenti, ma i Button restano cliccabili.
+  window.digitaljs = {Circuit, Vector3vl, cells, ...}; Vector3vl.one / .zero / .fromBin("01", 2).
+
+Idee simili: flip-flop D e latch SR (Nor in retroazione), registro a scorrimento (Dff in cascata),
+sommatore a propagazione di riporto (Addition o catena di Xor/And), multiplexer 4:1 (Mux), decoder,
+contatore modulo M (Dff + confronto Eq con Constant e reset sincrono), riconoscitore di sequenza
+(FSM con trans_table), ALU a 4 bit con NumEntry, ROM (Memory con memdata).
+
+Regole: titolo breve, dati in .doll-dati, didascalie <= ~12 parole, Doll.guida per il percorso
+guidato (ogni passo = uno stato fotografato dal controllo), Doll.pronto() alla fine.
+Build:  .venv/bin/python .claude/skills/spiega/scripts/web_build.py pagina.html
+Check:  .venv/bin/python .claude/skills/spiega/scripts/web_check.py interattivo.html
+NOTA: il bundle mette window.jQuery (e window.$ se libero): nel tuo script non ridefinire $ con const
+a livello globale (usa un altro nome, qui "q"). La libreria pesa ~2,5 MB (JointJS + ELK + jQuery).
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contatore a 2 bit</title>
+<!-- doll:lib digitaljs -->
+<style>
+  .ds-vista { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  #paper { flex: 1; min-height: 0; position: relative; }
+  #crono { height: 132px; flex: none; border-top: 1px solid var(--bordo); display: block; }
+  .ds-legenda { position: absolute; top: 10px; left: 12px; font-size: 13px; color: var(--tenue); z-index: 2;
+                background: rgba(255,255,255,.88); padding: 4px 8px; border-radius: 8px; }
+  .ds-legenda i { display: inline-block; width: 18px; height: 4px; vertical-align: middle; margin: 0 5px 0 10px; border-radius: 2px; }
+  /* palette Doll al posto dei colori di DigitalJS (sono attributi SVG: il CSS vince) */
+  .djs [stroke="#03c03c"] { stroke: var(--arancio); }
+  .djs [stroke="#fc7c68"] { stroke: #a3a3a8; }
+  .djs [stroke="#999"]    { stroke: #cfcfd4; stroke-dasharray: 4 3; }
+  .djs [fill="#03c03c"]   { fill: var(--arancio); }
+  .djs [fill="#fc7c68"]   { fill: #d6d6da; }
+  .djs .joint-link .connection { stroke-width: 3; }
+  .djs text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  @media (max-width: 820px) { .doll-vista { min-height: 430px; } #crono { height: 120px; } }
+</style>
+</head>
+<body>
+<header class="doll-top">
+  <h1>Contatore sincrono a 2 bit</h1>
+  <div class="doll-dati">$Q_0^{+} = Q_0 \oplus EN \qquad Q_1^{+} = Q_1 \oplus (Q_0 \cdot EN)$</div>
+</header>
+<main class="doll-main">
+  <section class="doll-vista" id="vista">
+    <div class="ds-vista">
+      <div id="paper"></div>
+      <canvas id="crono"></canvas>
+    </div>
+    <div class="ds-legenda">filo<i style="background:#dd6b20"></i>1<i style="background:#a3a3a8"></i>0
+      &nbsp;· clicca i quadrati per cambiare gli ingressi</div>
+  </section>
+  <aside class="doll-pannello" id="pannello"></aside>
+</main>
+<footer class="doll-didascalia" id="didascalia"></footer>
+
+<script>
+const C = Doll.col;
+const V3 = digitaljs.Vector3vl;
+const q = id => document.getElementById(id);
+
+// ---------------- il circuito (formato JSON di DigitalJS) ----------------
+const FF = { type: "Dff", bits: 1, polarity: { clock: true, arst: true }, initial: "0" };
+const CIRCUITO = {
+  devices: {
+    en:  { type: "Button", label: "EN",  net: "en",  bits: 1 },
+    clk: { type: "Button", label: "clk", net: "clk", bits: 1 },
+    rst: { type: "Button", label: "RST", net: "rst", bits: 1 },
+    x0:  { type: "Xor", label: "", bits: 1 },
+    a1:  { type: "And", label: "", bits: 1 },
+    x1:  { type: "Xor", label: "", bits: 1 },
+    ff0: { ...FF, label: "FF0" },
+    ff1: { ...FF, label: "FF1" },
+    bus: { type: "BusGroup", groups: [1, 1] },          // in0 = Q0 (LSB), in1 = Q1
+    q0:  { type: "Lamp", label: "Q0", net: "q0", bits: 1 },
+    q1:  { type: "Lamp", label: "Q1", net: "q1", bits: 1 },
+    n:   { type: "NumDisplay", label: "N", net: "n", bits: 2, numbase: "dec" },
+  },
+  connectors: [
+    { from: { id: "en",  port: "out" }, to: { id: "x0",  port: "in1" } },
+    { from: { id: "ff0", port: "out" }, to: { id: "x0",  port: "in2" } },
+    { from: { id: "x0",  port: "out" }, to: { id: "ff0", port: "in" } },
+    { from: { id: "en",  port: "out" }, to: { id: "a1",  port: "in1" } },
+    { from: { id: "ff0", port: "out" }, to: { id: "a1",  port: "in2" } },
+    { from: { id: "a1",  port: "out" }, to: { id: "x1",  port: "in1" } },
+    { from: { id: "ff1", port: "out" }, to: { id: "x1",  port: "in2" } },
+    { from: { id: "x1",  port: "out" }, to: { id: "ff1", port: "in" } },
+    { from: { id: "clk", port: "out" }, to: { id: "ff0", port: "clk" } },
+    { from: { id: "clk", port: "out" }, to: { id: "ff1", port: "clk" } },
+    { from: { id: "rst", port: "out" }, to: { id: "ff0", port: "arst" } },
+    { from: { id: "rst", port: "out" }, to: { id: "ff1", port: "arst" } },
+    { from: { id: "ff0", port: "out" }, to: { id: "q0",  port: "in" } },
+    { from: { id: "ff1", port: "out" }, to: { id: "q1",  port: "in" } },
+    { from: { id: "ff0", port: "out" }, to: { id: "bus", port: "in0" } },
+    { from: { id: "ff1", port: "out" }, to: { id: "bus", port: "in1" } },
+    { from: { id: "bus", port: "out" }, to: { id: "n",   port: "in" } },
+  ],
+  subcircuits: {},
+};
+
+const circuito = new digitaljs.Circuit(CIRCUITO);
+const paper = circuito.displayOn(q("paper"));
+paper.fixed(true);
+// adatta il disegno alla vista (al posto del fitToContent di DigitalJS, che lo lascerebbe piccolo)
+circuito.stopListening(paper, "render:done");
+let ultimaArea = "";
+function adatta(forza) {
+  // si misura il contenitore: la larghezza di #paper la impone JointJS (setDimensions)
+  const box = q("paper").parentElement, w = box.clientWidth, h = box.clientHeight - q("crono").offsetHeight;
+  const area = JSON.stringify([paper.getContentArea({ useModelGeometry: true }), w, h]);
+  if (!forza && area === ultimaArea) return;
+  ultimaArea = area;
+  paper.setDimensions(w, h);
+  paper.transformToFitContent({ padding: { top: 44, bottom: 16, left: 16, right: 16 }, maxScale: 1.9,
+    useModelGeometry: true, horizontalAlign: "middle", verticalAlign: "middle" });
+}
+paper.on("render:done", () => adatta(false));
+new ResizeObserver(() => { adatta(true); disegnaCrono(); }).observe(q("paper").parentElement);
+circuito.start();
+
+// ---------------- simulazione: ingressi, uscite, assestamento ----------------
+const leggi = id => { const s = circuito.getOutput(id); return s.isHigh ? 1 : s.isLow ? 0 : null; };
+const ingresso = id => { const s = circuito._graph.getCell(id).get("outputSignals").out; return s.isHigh ? 1 : 0; };
+function assesta() { let k = 0; while (circuito.hasPendingEvents && k++ < 5000) circuito.updateGatesNext(); }
+function imposta(id, v) { circuito.setInput(id, v ? V3.one : V3.zero); assesta(); }
+
+// storia per il diagramma temporale: un campione per fronte di salita del clock
+let storia = [];
+const campione = () => ({ en: ingresso("en"), q0: leggi("q0"), q1: leggi("q1") });
+let clkPrima = 0, daCodice = false;
+// fronti fatti cliccando "clk" nel disegno (quelli del codice li registra fronte())
+circuito._graph.getCell("clk").on("change:outputSignals", (cell, s) => {
+  const ora = s.out.isHigh ? 1 : 0;
+  if (ora && !clkPrima && !daCodice) setTimeout(() => { assesta(); storia.push(campione()); taglia(); aggiorna(); }, 0);
+  clkPrima = ora;
+});
+["en", "rst"].forEach(id => circuito._graph.getCell(id).on("change:outputSignals", () => setTimeout(aggiorna, 0)));
+const taglia = () => { if (storia.length > 13) storia = storia.slice(-13); };
+function fronte() {
+  daCodice = true; imposta("clk", 1); imposta("clk", 0); daCodice = false;
+  storia.push(campione()); taglia(); aggiorna();
+}
+
+// ---------------- pannello ----------------
+Doll.titoletto(null, "Ingressi");
+Doll.bottone(null, "Fronte di clock ↑", () => fronte(), false);
+const anim = (() => {
+  let acc = 0;
+  return Doll.animazione(dt => { acc += dt; if (acc >= 0.5) { acc = 0; fronte(); } });
+})();
+const swEn = Doll.interruttore(null, { label: "abilitazione EN", value: true, onChange: v => imposta("en", v) });
+Doll.bottone(null, "Reset (RST)", () => { imposta("rst", 1); imposta("rst", 0); storia.push(campione()); taglia(); aggiorna(); });
+Doll.titoletto(null, "Letture");
+const lStato = Doll.lettura(null, "stato $Q_1 Q_0$");
+const lN = Doll.lettura(null, "valore $N$");
+const lProx = Doll.lettura(null, "dopo il prossimo fronte");
+// "Prova tu": portare il contatore a N = 2 (Q1Q0 = 10) e bloccarlo con EN = 0. Enumerato: dal reset con
+// EN = 1 servono 2 fronti (0 -> 1 -> 2, oppure 6, 10, ...); con EN = 0 i fronti lasciano 2 (Q+ = Q).
+const prova = Doll.bersaglio(null, { testo: "Porta $Q_1Q_0$ a $10$ ($N=2$), poi spegni $EN$",
+  verifica: () => leggi("q1") === 1 && leggi("q0") === 0 && ingresso("en") === 0,
+  ok: "$N=2$ e $EN=0$: ora i fronti non lo cambiano più" });
+q("pannello").prepend(prova.el);   // in cima al pannello
+const nota = document.createElement("p"); nota.className = "doll-nota";
+nota.textContent = "Nel disegno: clicca EN, clk (due volte = un fronte) o RST."; q("pannello").appendChild(nota);
+
+function aggiorna() {
+  const q0 = leggi("q0"), q1 = leggi("q1"), en = ingresso("en");
+  swEn.set(!!en, true);
+  if (q0 === null || q1 === null) { lStato("indefinito"); lN("–"); lProx("–"); disegnaCrono(); return; }
+  const N = 2 * q1 + q0, P = en ? (N + 1) % 4 : N;
+  lStato(`${q1}${q0}`);
+  lN(`${N}`);
+  lProx(`${(P >> 1) & 1}${P & 1}  (N = ${P})`);
+  disegnaCrono();
+}
+
+// ---------------- diagramma temporale (canvas) ----------------
+const cv = q("crono"), cx = cv.getContext("2d");
+function disegnaCrono() {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr; cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cx.clearRect(0, 0, W, H);
+  const righe = [["clk", null], ["EN", "en"], ["Q0", "q0"], ["Q1", "q1"]];
+  const x0 = 46, passo = Math.max(28, Math.min(64, (W - x0 - 60) / 13)), h = (H - 22) / righe.length;
+  cx.font = "13px -apple-system, Helvetica, Arial, sans-serif"; cx.textBaseline = "middle";
+  righe.forEach(([nome, k], r) => {
+    const yb = 12 + (r + 1) * h - 6, yt = 12 + r * h + 6;
+    cx.fillStyle = C.grigio; cx.fillText(nome, 8, (yb + yt) / 2);
+    cx.lineWidth = 2.5;
+    for (let i = 0; i < storia.length; i++) {
+      const xa = x0 + i * passo, xb = xa + passo;
+      if (k === null) {                       // clock: un impulso per campione, fronte a xa
+        cx.strokeStyle = C.testo; cx.beginPath();
+        cx.moveTo(xa, yb); cx.lineTo(xa, yt); cx.lineTo(xa + passo / 2, yt); cx.lineTo(xa + passo / 2, yb); cx.lineTo(xb, yb); cx.stroke();
+        continue;
+      }
+      const v = storia[i][k], prec = i ? storia[i - 1][k] : v, y = v ? yt : yb;
+      cx.strokeStyle = v ? C.arancio : "#a3a3a8"; cx.beginPath();
+      if (prec !== v) { cx.moveTo(xa, prec ? yt : yb); cx.lineTo(xa, y); } else cx.moveTo(xa, y);
+      cx.lineTo(xb, y); cx.stroke();
+    }
+  });
+  // valore N sotto ogni campione
+  cx.fillStyle = C.testo; cx.textAlign = "center";
+  storia.forEach((s, i) => { if (s.q0 !== null && s.q1 !== null) cx.fillText(String(2 * s.q1 + s.q0), x0 + i * passo + passo / 2, H - 8); });
+  cx.textAlign = "left";
+}
+
+// ---------------- percorso guidato: ogni passo imposta lo stato da zero ----------------
+// reset, poi nSu fronti con EN = 1 e nGiu fronti con EN = 0 (lo stato finale non dipende dal passo prima)
+function vaiA(nSu, nGiu = 0) {
+  anim.pausa();
+  imposta("rst", 1); imposta("rst", 0);
+  imposta("en", 1);
+  storia = [campione()];
+  for (let i = 0; i < nSu + nGiu; i++) { if (i === nSu) imposta("en", 0); fronte(); }
+  aggiorna();
+}
+// ogni passo: stato completo, e il bersaglio solo nell'ultimo
+const passo = (nSu, nGiu = 0, provaTu = false) => () => { vaiA(nSu, nGiu); prova.mostra(provaTu); };
+// prevedi -> osserva -> spiega: il passo 4 chiede cosa fanno i fronti con EN = 0, il 5 lo mostra
+Doll.guida([
+  { testo: "Reset: $Q_1Q_0=00$. I fili arancioni valgono 1", applica: passo(0) },
+  { testo: "Ogni fronte di salita: $N$ aumenta di 1", applica: passo(2) },
+  { testo: "Da 3 torna a 0: il riporto passa per l'AND", applica: passo(4) },
+  { testo: "Ora spegni $EN$ e dai tre fronti: $N$ cambia? Prevedi", applica: passo(5) },
+  { testo: "No: con $EN=0$ ogni flip-flop ricopia il suo stato", applica: passo(5, 3) },
+  { testo: "Prova tu: porta $N$ a 2 e bloccalo con $EN=0$", applica: passo(0, 0, true) },
+]);
+Doll.pronto();
+</script>
+</body>
+</html>

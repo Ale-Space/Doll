@@ -1,0 +1,414 @@
+<!doctype html>
+<!--
+TEMPLATE WEB: simulazione meccanica in tempo reale (EDO integrata con RK4) su canvas,
+disegno "da libro" + grafico in diretta + grafico teorico, tutto disegnato a mano (niente librerie:
+veloce e leggero). Fisica 1: oscillatore armonico smorzato e forzato
+    m x'' + b x' + k x = F0 cos(w t)
+Cosa c'e': muro, molla a zig-zag, smorzatore, blocco trascinabile, terreno tratteggiato, freccia
+della forzante, barra dell'energia; grafico x(t) in diretta (con F(t)/k tratteggiata per vedere
+lo sfasamento); curva di risonanza A(w) analitica con il marcatore al w attuale.
+
+Struttura del codice (riusala):
+  1. MODELLO    parametri `p`, stato `s`, accel() = la EDO, passoRK4(), avanza(dt) a sotto-passi;
+  2. STORIA     campioni a frequenza fissa per il grafico in diretta (finestra di FINESTRA s);
+  3. DISEGNO    helper: molla(), smorzatore(), tratteggio(), freccia(), assi() (mini grafico con tacche);
+  4. PANNELLO   slider, preset, letture (aggiornate 10 volte al secondo, non a ogni frame);
+  5. GUIDA      ogni passo imposta i parametri e PRE-SIMULA qualche secondo (preSimula), cosi'
+                il grafico e' gia' pieno anche nello screenshot del controllo automatico.
+                Prevedi -> osserva: il passo 2 pone la domanda (ampiezza doppia: il periodo cambia?) con la
+                simulazione ferma e il grafico vuoto, il passo 3 la fa vedere. L'ultimo passo e' "Prova tu":
+                un compito con Doll.bersaglio (✓ quando e' raggiunto), mostrato solo in quel passo.
+Controllo fisico: verificaEnergia() integra 20 s con b = 0 e F0 = 0 e restituisce la deriva
+relativa massima di E (deve essere < 1e-4). Da console: verificaEnergia().
+
+Idee per esercizi simili (cambia accel(), energia() e disegnaScena()):
+  - pendolo semplice: theta'' = -(g/L) sin theta (- gamma theta'); confronto con l'approssimazione
+    lineare, periodo in funzione dell'ampiezza; asta + cerniera + massa al posto della molla;
+  - oscillatori accoppiati: stato [x1, v1, x2, v2], due blocchi e tre molle; modi normali
+    (in fase / in controfase) come preset, battimenti nel grafico x1(t), x2(t);
+  - circuito RLC serie: STESSA EDO con L q'' + R q' + q/C = V0 cos(w t)  (m->L, b->R, k->1/C, F0->V0);
+    disegna il circuito al posto della molla, grafico di i(t) = q', risonanza in corrente;
+  - orbite (problema dei due corpi): stato [x, y, vx, vy], a = -GM r/|r|^3; energia e momento
+    angolare costanti (controllo!), leggi di Keplero, velocita' iniziale con slider;
+  - pendolo doppio (Sistemi complessi, caos): equazioni di Lagrange, due simulazioni con condizioni
+    iniziali diverse di 1e-6 rad che divergono; energia conservata con dt piccolo.
+Regole: titolo breve, dati in .doll-dati, didascalie <= ~12 parole, Doll.guida, Doll.pronto() alla fine.
+Build:  .venv/bin/python .claude/skills/spiega/scripts/web_build.py pagina.html
+Check:  .venv/bin/python .claude/skills/spiega/scripts/web_check.py interattivo.html
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oscillatore forzato</title>
+<!-- doll:lib katex -->
+<style>
+  #vista canvas { touch-action: none; }
+  .doll-pannello { gap: 8px; }
+  .doll-pannello .doll-lettura { padding: 3px 0; font-size: 13.5px; }
+  .doll-pannello .doll-ctrl label { margin-bottom: 1px; }
+  @media (max-width: 820px) { html, body { height: auto; } .doll-vista { min-height: 620px; } }
+</style>
+</head>
+<body>
+<header class="doll-top">
+  <h1>Oscillatore forzato</h1>
+  <div class="doll-dati">$m\ddot x+b\dot x+kx=F_0\cos\omega t$</div>
+</header>
+<main class="doll-main">
+  <section class="doll-vista" id="vista"></section>
+  <aside class="doll-pannello" id="pannello"></aside>
+</main>
+<footer class="doll-didascalia" id="didascalia"></footer>
+
+<script>
+const C = Doll.col;
+
+/* ============================ 1. MODELLO ============================ */
+// parametri (SI): massa [kg], costante elastica [N/m], smorzamento [kg/s], forzante [N], pulsazione [rad/s]
+const p = { m: 1, k: 16, b: 0, F0: 0, w: 2 };
+// stato: posizione [m], velocita' [m/s], tempo [s], fase della forzante [rad] (accumulata: cambiando w
+// la forza resta continua, invece cos(w t) salterebbe)
+const s = { x: 0.5, v: 0, t: 0, fase: 0 };
+const X0 = 0.5;                                            // spostamento iniziale dei reset [m]
+
+const accel = (x, v, fase) => (p.F0 * Math.cos(fase) - p.b * v - p.k * x) / p.m;
+const energia = (x = s.x, v = s.v) => 0.5 * p.m * v * v + 0.5 * p.k * x * x;   // K + U elastica
+const w0 = () => Math.sqrt(p.k / p.m);
+const zeta = () => p.b / (2 * Math.sqrt(p.k * p.m));
+// risposta a regime: ampiezza e sfasamento (ritardo di x rispetto a F, tra 0 e pi)
+const ampiezza = w => (p.F0 / p.m) / Math.hypot(w0() ** 2 - w * w, p.b * w / p.m);
+const sfasamento = w => Math.atan2(p.b * w, p.k - p.m * w * w);
+
+function passoRK4(h) {
+  const { x, v, fase } = s, w = p.w;
+  const a1 = accel(x, v, fase);
+  const x2 = x + 0.5 * h * v,  v2 = v + 0.5 * h * a1, a2 = accel(x2, v2, fase + 0.5 * h * w);
+  const x3 = x + 0.5 * h * v2, v3 = v + 0.5 * h * a2, a3 = accel(x3, v3, fase + 0.5 * h * w);
+  const x4 = x + h * v3,       v4 = v + h * a3,       a4 = accel(x4, v4, fase + h * w);
+  s.x = x + h / 6 * (v + 2 * v2 + 2 * v3 + v4);
+  s.v = v + h / 6 * (a1 + 2 * a2 + 2 * a3 + a4);
+  s.t += h; s.fase += h * w;
+}
+// passo massimo: ~1/50 del tempo caratteristico piu' breve (accurato anche con k grande o b grande)
+const hMax = () => Math.min(1 / 1000, 0.02 / Math.max(w0(), p.w, p.b / p.m, 1));
+
+/* ============================ 2. STORIA (grafico in diretta) ============================ */
+const FINESTRA = 10, DT_CAMPIONE = 1 / 120;               // s
+const storia = { t: [], x: [], f: [] };                   // f = F(t)/k: spostamento "statico" della forzante
+let prossimoCampione = 0, Emax = energia();
+function campiona() {
+  storia.t.push(s.t); storia.x.push(s.x); storia.f.push(p.F0 * Math.cos(s.fase) / p.k);
+  if (storia.t.length > FINESTRA / DT_CAMPIONE + 240) for (const c in storia) storia[c].splice(0, 240);
+}
+let trascino = false;
+function avanza(dt) {
+  if (trascino || dt <= 0) return;
+  const n = Math.ceil(dt / hMax()), h = dt / n;
+  for (let i = 0; i < n; i++) {
+    passoRK4(h);
+    if (s.t >= prossimoCampione) { campiona(); prossimoCampione = s.t + DT_CAMPIONE; }
+  }
+  Emax = Math.max(Emax, energia());
+}
+function reset(x = X0, v = 0) {
+  Object.assign(s, { x, v, t: 0, fase: 0 }); for (const c in storia) storia[c].length = 0;
+  prossimoCampione = 0; Emax = energia(); campiona();
+}
+function preSimula(sec) { for (let t = 0; t < sec; t += 1 / 60) avanza(1 / 60); }
+
+// controllo fisico: con b = 0 e F0 = 0 l'energia deve restare costante (stesso integratore del tempo reale)
+window.verificaEnergia = function (durata = 20, x0 = X0) {
+  const salva = { ...p }, salvaS = { ...s };
+  p.b = 0; p.F0 = 0; Object.assign(s, { x: x0, v: 0, t: 0, fase: 0 });
+  const E0 = energia(); let deriva = 0;
+  const n0 = Math.ceil((1 / 60) / hMax()), h = (1 / 60) / n0;
+  for (let f = 0; f < durata * 60; f++) { for (let i = 0; i < n0; i++) passoRK4(h); deriva = Math.max(deriva, Math.abs(energia() - E0) / E0); }
+  Object.assign(p, salva); Object.assign(s, salvaS);
+  return deriva;
+};
+
+/* ============================ 3. DISEGNO ============================ */
+const cv = Doll.canvas(), ctx = cv.ctx;
+const FONT = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+const FONT_SIMB = 'italic 16px "Times New Roman", Times, serif';     // simboli matematici sul canvas
+const GRIGIO_TRATTO = "#3a3a3c";
+
+// regioni: scena in alto, x(t) in basso a sinistra, A(w) in basso a destra (in colonna se stretto)
+function regioni() {
+  const W = cv.w, H = cv.h, g = 14;
+  if (W < 640) {
+    const h1 = H * 0.36, h2 = (H - h1) / 2;
+    return { scena: { x: 0, y: 0, w: W, h: h1 }, xt: { x: 0, y: h1, w: W, h: h2 }, res: { x: 0, y: h1 + h2, w: W, h: h2 } };
+  }
+  const h1 = Math.min(H * 0.44, 300), wx = W * 0.6;
+  return { scena: { x: 0, y: 0, w: W, h: h1 }, xt: { x: 0, y: h1, w: wx, h: H - h1 }, res: { x: wx, y: h1, w: W - wx, h: H - h1 }, g };
+}
+
+// tratteggio "terreno": segmenti obliqui lungo un segmento (lato = dove va il tratteggio)
+function tratteggio(x1, y1, x2, y2, lato, passo = 9, l = 9) {
+  const L = Math.hypot(x2 - x1, y2 - y1), ux = (x2 - x1) / L, uy = (y2 - y1) / L;
+  const nx = -uy * lato, ny = ux * lato;
+  ctx.save(); ctx.strokeStyle = GRIGIO_TRATTO; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let d = 0; d <= L; d += passo) {
+    const x = x1 + ux * d, y = y1 + uy * d;
+    ctx.moveTo(x, y); ctx.lineTo(x + nx * l - ux * l * 0.8, y + ny * l - uy * l * 0.8);
+  }
+  ctx.stroke();
+  ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.restore();
+}
+// molla a zig-zag orizzontale da xa a xb all'altezza y: spire fisse, il passo si adatta alla lunghezza
+function molla(xa, xb, y, spire = 10, amp = 9) {
+  const L = xb - xa, capo = Math.min(14, L * 0.12), tratto = (L - 2 * capo) / (2 * spire);
+  ctx.save(); ctx.strokeStyle = GRIGIO_TRATTO; ctx.lineWidth = 2; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.moveTo(xa, y); ctx.lineTo(xa + capo, y);
+  for (let i = 0; i < 2 * spire; i++) ctx.lineTo(xa + capo + tratto * (i + 0.5), y + (i % 2 ? amp : -amp));
+  ctx.lineTo(xb - capo, y); ctx.lineTo(xb, y); ctx.stroke(); ctx.restore();
+}
+// smorzatore: cilindro fisso al muro (xa), pistone legato al blocco (xb); xbEq = xb all'equilibrio,
+// dove il pistone sta a meta' cilindro. Grigio chiaro se b = 0.
+function smorzatore(xa, xb, y, attivo, xbEq) {
+  const hc = 16, xc = xa + 16, Lc = Math.max(40, 0.55 * (xbEq - xa - 16));   // cilindro: da xc a xc+Lc
+  const asta = xbEq - (xc + Lc / 2);                                         // asta del pistone (fissa)
+  ctx.save(); ctx.strokeStyle = attivo ? GRIGIO_TRATTO : "#c9c6bb"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(xa, y); ctx.lineTo(xc, y);                                  // attacco al muro
+  ctx.moveTo(xc + Lc, y - hc / 2); ctx.lineTo(xc, y - hc / 2); ctx.lineTo(xc, y + hc / 2); ctx.lineTo(xc + Lc, y + hc / 2);
+  const xp = Math.max(xc + 5, Math.min(xc + Lc - 3, xb - asta));                           // pistone
+  ctx.moveTo(xp, y - hc / 2 + 3); ctx.lineTo(xp, y + hc / 2 - 3); ctx.moveTo(xp, y); ctx.lineTo(xb, y);
+  ctx.stroke(); ctx.restore();
+}
+function freccia(x1, y1, x2, y2, colore, spess = 2.5, punta = 9) {
+  const L = Math.hypot(x2 - x1, y2 - y1); if (L < 2) return;
+  const ux = (x2 - x1) / L, uy = (y2 - y1) / L, pt = Math.min(punta, L * 0.6);
+  ctx.save(); ctx.strokeStyle = ctx.fillStyle = colore; ctx.lineWidth = spess;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2 - ux * pt * 0.8, y2 - uy * pt * 0.8); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x2, y2); ctx.lineTo(x2 - ux * pt - uy * pt * 0.5, y2 - uy * pt + ux * pt * 0.5);
+  ctx.lineTo(x2 - ux * pt + uy * pt * 0.5, y2 - uy * pt - ux * pt * 0.5); ctx.closePath(); ctx.fill(); ctx.restore();
+}
+function testo(t, x, y, { font = FONT, col = C.testo, al = "left", base = "alphabetic" } = {}) {
+  ctx.save(); ctx.font = font; ctx.fillStyle = col; ctx.textAlign = al; ctx.textBaseline = base; ctx.fillText(t, x, y); ctx.restore();
+}
+// passo "bello" per le tacche (1, 2, 2.5, 5 x 10^n) e massimo arrotondato
+function passoBello(range, n = 5) {
+  const grezzo = range / n, e = 10 ** Math.floor(Math.log10(grezzo)), r = grezzo / e;
+  return (r < 1.5 ? 1 : r < 2.25 ? 2 : r < 3.5 ? 2.5 : r < 7.5 ? 5 : 10) * e;
+}
+// cifre decimali che servono per scrivere esattamente il passo (2,5 -> 1; 0,25 -> 2)
+const decimali = st => { for (let d = 0; d < 6; d++) if (Math.abs(Math.round(st * 10 ** d) - st * 10 ** d) < 1e-6) return d; return 6; };
+const tetto = v => { const st = passoBello(v, 4); return Math.ceil(v / st - 1e-9) * st; };
+const virgola = (v, d) => v.toFixed(d).replace(".", ",");
+// mini grafico: disegna riquadro, tacche ed etichette; restituisce le mappe dati -> pixel
+function assi(box, o) {
+  const m = { l: 52, r: 14, t: 26, b: 34 };
+  const x0 = box.x + m.l, x1 = box.x + box.w - m.r, y0 = box.y + box.h - m.b, y1 = box.y + m.t;
+  const X = v => x0 + (v - o.xr[0]) / (o.xr[1] - o.xr[0]) * (x1 - x0);
+  const Y = v => y0 - (v - o.yr[0]) / (o.yr[1] - o.yr[0]) * (y0 - y1);
+  ctx.save(); ctx.font = "12px -apple-system, Helvetica, Arial, sans-serif"; ctx.fillStyle = C.grigio;
+  ctx.strokeStyle = "#ecebe5"; ctx.lineWidth = 1;
+  const sx = passoBello(o.xr[1] - o.xr[0], Math.max(3, Math.round((x1 - x0) / 80)));
+  const sy = passoBello(o.yr[1] - o.yr[0], Math.max(2, Math.round((y0 - y1) / 45)));
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let v = Math.ceil(o.xr[0] / sx) * sx; v <= o.xr[1] + 1e-9; v += sx) {
+    ctx.beginPath(); ctx.moveTo(X(v), y0); ctx.lineTo(X(v), y1); ctx.stroke();
+    ctx.fillText(virgola(v, decimali(sx)), X(v), y0 + 5);
+  }
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  const dec = decimali(sy);
+  for (let v = Math.ceil(o.yr[0] / sy) * sy; v <= o.yr[1] + 1e-9; v += sy) {
+    ctx.beginPath(); ctx.moveTo(x0, Y(v)); ctx.lineTo(x1, Y(v)); ctx.stroke();
+    ctx.fillText(virgola(Math.abs(v) < 1e-12 ? 0 : v, dec), x0 - 6, Y(v));
+  }
+  ctx.strokeStyle = "#9a978d"; ctx.strokeRect(x0, y1, x1 - x0, y0 - y1);
+  if (o.yr[0] < 0 && o.yr[1] > 0) { ctx.strokeStyle = "#b9b6ac"; ctx.beginPath(); ctx.moveTo(x0, Y(0)); ctx.lineTo(x1, Y(0)); ctx.stroke(); }
+  ctx.restore();
+  testo(o.xlab, x1, y0 + 30, { font: FONT_SIMB, al: "right" });
+  testo(o.ylab, x0, y1 - 8, { font: FONT_SIMB, al: "left" });
+  const clip = () => { ctx.beginPath(); ctx.rect(x0, y1, x1 - x0, y0 - y1); ctx.clip(); };
+  return { X, Y, x0, x1, y0, y1, clip };
+}
+function polilinea(xs, ys, G, colore, spess = 2, tratt = null) {
+  ctx.save(); G.clip(); ctx.strokeStyle = colore; ctx.lineWidth = spess; ctx.lineJoin = "round";
+  if (tratt) ctx.setLineDash(tratt);
+  ctx.beginPath(); for (let i = 0; i < xs.length; i++) { const X = G.X(xs[i]), Y = G.Y(ys[i]); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }
+  ctx.stroke(); ctx.restore();
+}
+
+/* ---------- scena: muro, molla, smorzatore, blocco, terreno ---------- */
+let geo = null;                                            // geometria della scena (serve anche al trascinamento)
+function disegnaScena(R) {
+  const { x: bx, y: by, w: bw, h: bh } = R;
+  const yTerra = by + bh * 0.72, xMuro = bx + 40, lb = 74, hb = 66;
+  const scala = (bw - 120) * 0.22;                         // px per metro
+  const xEq = xMuro + Math.min(0.45 * (bw - 80), 360);     // centro del blocco all'equilibrio
+  const xMaxPx = xEq - xMuro - lb / 2 - 50;                // non si entra nel muro
+  let xd = s.x * scala, fuori = false;
+  if (Math.abs(xd) > xMaxPx) { xd = Math.sign(xd) * xMaxPx; fuori = true; }
+  const xc = xEq + xd, yc = yTerra - hb / 2;
+  geo = { xEq, scala, xc, yc, lb, hb, xMaxPx };
+
+  tratteggio(bx + 18, yTerra, bx + bw - 18, yTerra, -1);   // terreno
+  tratteggio(xMuro, yTerra, xMuro, by + bh * 0.16, -1);    // muro (tratteggio a sinistra)
+  // linea di equilibrio
+  ctx.save(); ctx.setLineDash([5, 5]); ctx.strokeStyle = "#9a978d"; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(xEq, yTerra + 4); ctx.lineTo(xEq, by + bh * 0.1); ctx.stroke(); ctx.restore();
+  testo("x = 0", xEq, by + bh * 0.1 - 4, { font: FONT_SIMB, al: "center", col: C.grigio });
+
+  molla(xMuro, xc - lb / 2, yc - 15);
+  smorzatore(xMuro, xc - lb / 2, yc + 15, p.b > 0, xEq - lb / 2);
+  // blocco
+  ctx.save(); ctx.fillStyle = "#dbe7f3"; ctx.strokeStyle = GRIGIO_TRATTO; ctx.lineWidth = 2;
+  ctx.fillRect(xc - lb / 2, yTerra - hb, lb, hb); ctx.strokeRect(xc - lb / 2, yTerra - hb, lb, hb); ctx.restore();
+  testo("m", xc, yc + 6, { font: 'italic 22px "Times New Roman", serif', al: "center" });
+  // spostamento x (sotto il terreno)
+  const yFr = yTerra + 24;
+  if (Math.abs(xd) > 3) { freccia(xEq, yFr, xc, yFr, C.blu, 2); }
+  testo("x", (xEq + xc) / 2 + (Math.abs(xd) > 3 ? 0 : 10), yFr + 18, { font: FONT_SIMB, al: "center", col: C.blu });
+  // forzante F(t) applicata al lato destro del blocco
+  if (p.F0 > 0) {
+    const F = p.F0 * Math.cos(s.fase), L = 60 * F / 5;     // 5 N -> 60 px
+    const xa = xc + lb / 2, ya = yc;
+    // F > 0 tira verso destra (freccia che parte dal blocco), F < 0 spinge verso sinistra (freccia che arriva al blocco)
+    if (Math.abs(L) > 2) { if (F > 0) freccia(xa, ya, xa + L, ya, C.arancio, 3); else freccia(xa - L, ya, xa, ya, C.arancio, 3); }
+    testo("F(t)", xa + Math.abs(L) + 8, ya - 8, { font: FONT_SIMB, col: C.arancio });
+  }
+  if (fuori) testo("fuori scala", xc, yTerra - hb - 10, { al: "center", col: C.rosso });
+  // barra dell'energia (K blu + U verde), lunghezza relativa al massimo dall'ultimo reset
+  const E = energia(), K = 0.5 * p.m * s.v * s.v, Wb = Math.min(180, bw * 0.24), xb0 = bx + bw - Wb - 20, yb0 = by + 22;
+  const sc = Emax > 0 ? Wb / Emax : 0;
+  ctx.save(); ctx.fillStyle = C.blu; ctx.fillRect(xb0, yb0, K * sc, 10);
+  ctx.fillStyle = C.verde; ctx.fillRect(xb0 + K * sc, yb0, (E - K) * sc, 10);
+  ctx.strokeStyle = "#9a978d"; ctx.lineWidth = 1; ctx.strokeRect(xb0, yb0, Wb, 10); ctx.restore();
+  testo("E = K + U", xb0, yb0 - 6, { font: FONT_SIMB });
+  testo("K", xb0, yb0 + 26, { font: FONT_SIMB, col: C.blu });
+  testo("U", xb0 + 18, yb0 + 26, { font: FONT_SIMB, col: C.verde });
+}
+
+/* ---------- grafici ---------- */
+function disegnaXt(R) {
+  const tFine = Math.max(FINESTRA, s.t), tIni = tFine - FINESTRA;
+  let i0 = storia.t.findIndex(t => t >= tIni); if (i0 < 0) i0 = storia.t.length;
+  const xs = storia.t.slice(i0), xx = storia.x.slice(i0), ff = storia.f.slice(i0);
+  let M = 0.05; for (const v of xx) M = Math.max(M, Math.abs(v)); if (p.F0 > 0) for (const v of ff) M = Math.max(M, Math.abs(v));
+  const ym = tetto(M * 1.1);
+  const G = assi(R, { xr: [tIni, tFine], yr: [-ym, ym], xlab: "t [s]", ylab: "x [m]" });
+  if (p.F0 > 0) polilinea(xs, ff, G, C.arancio, 1.6, [6, 4]);
+  polilinea(xs, xx, G, C.blu, 2.2);
+  // legenda
+  const lx = G.x1 - 8; testo("x(t)", lx - (p.F0 > 0 ? 62 : 0), G.y1 - 8, { font: FONT_SIMB, col: C.blu, al: "right" });
+  if (p.F0 > 0) testo("F(t)/k", lx, G.y1 - 8, { font: FONT_SIMB, col: C.arancio, al: "right" });
+}
+const W_MAX = 12;                                          // = massimo dello slider di w
+function disegnaRisonanza(R) {
+  const n = 300, ws = Array.from({ length: n + 1 }, (_, i) => W_MAX * i / n);
+  const As = ws.map(ampiezza), stat = p.F0 / p.k;
+  // massimo: picco a w_r = w0 sqrt(1 - 2 zeta^2) se zeta < 1/sqrt2; con b = 0 e' infinito -> tetto a 12 F0/k
+  const z = zeta(), Apicco = z < Math.SQRT1_2 ? ampiezza(w0() * Math.sqrt(1 - 2 * z * z)) : ampiezza(0);
+  const ym = p.F0 > 0 ? tetto(Math.min(Apicco * 1.12, 12 * stat)) : 1;
+  const G = assi(R, { xr: [0, W_MAX], yr: [0, ym], xlab: "ω [rad/s]", ylab: "A [m]" });
+  // w0
+  if (w0() < W_MAX) {
+    ctx.save(); ctx.setLineDash([4, 4]); ctx.strokeStyle = "#9a978d"; ctx.beginPath();
+    ctx.moveTo(G.X(w0()), G.y0); ctx.lineTo(G.X(w0()), G.y1); ctx.stroke(); ctx.restore();
+    testo("ω₀", G.X(w0()) + 4, G.y1 + 16, { font: FONT_SIMB, col: C.grigio });
+  }
+  if (p.F0 <= 0) { testo("nessuna forzante: F₀ = 0", (G.x0 + G.x1) / 2, (G.y0 + G.y1) / 2, { al: "center", col: C.grigio }); return; }
+  polilinea(ws, As.map(a => Math.min(a, ym * 2)), G, C.blu, 2.2);
+  // marcatore al w attuale (sul bordo se fuori scala)
+  const Aw = ampiezza(p.w), yM = G.Y(Math.min(Aw, ym));
+  ctx.save(); ctx.setLineDash([3, 3]); ctx.strokeStyle = C.arancio; ctx.beginPath(); ctx.moveTo(G.X(p.w), G.y0); ctx.lineTo(G.X(p.w), yM); ctx.stroke(); ctx.restore();
+  ctx.save(); ctx.fillStyle = C.arancio; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(G.X(p.w), yM, 6, 0, 2 * Math.PI); ctx.fill(); ctx.stroke(); ctx.restore();
+  testo("A(ω)", G.x1 - 8, G.y1 - 8, { font: FONT_SIMB, col: C.blu, al: "right" });
+}
+
+function disegna() {
+  ctx.clearRect(0, 0, cv.w, cv.h);
+  const R = regioni();
+  disegnaScena(R.scena);
+  ctx.save(); ctx.strokeStyle = C.bordo; ctx.beginPath();
+  ctx.moveTo(14, R.xt.y); ctx.lineTo(cv.w - 14, R.xt.y);
+  if (R.res.x > 0) { ctx.moveTo(R.res.x, R.res.y + 10); ctx.lineTo(R.res.x, cv.h - 10); } else { ctx.moveTo(14, R.res.y); ctx.lineTo(cv.w - 14, R.res.y); }
+  ctx.stroke(); ctx.restore();
+  disegnaXt(R.xt); disegnaRisonanza(R.res);
+}
+// ResizeObserver: ridisegna anche quando la vista cambia misura senza un resize della finestra
+new ResizeObserver(() => { cv.fit(); disegna(); }).observe(document.getElementById("vista"));
+
+/* ---------- trascinamento del blocco (imposta x(0), v = 0) ---------- */
+cv.c.addEventListener("pointerdown", ev => {
+  if (!geo) return; const r = cv.c.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  if (Math.abs(mx - geo.xc) < geo.lb / 2 + 6 && Math.abs(my - geo.yc) < geo.hb / 2 + 6) {
+    trascino = true; cv.c.setPointerCapture(ev.pointerId); cv.c.style.cursor = "grabbing";
+  }
+});
+cv.c.addEventListener("pointermove", ev => {
+  const r = cv.c.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  if (!trascino) { cv.c.style.cursor = geo && Math.abs(mx - geo.xc) < geo.lb / 2 && Math.abs(my - geo.yc) < geo.hb / 2 ? "grab" : ""; return; }
+  const xm = Math.max(-geo.xMaxPx, Math.min(geo.xMaxPx, mx - geo.xEq)) / geo.scala;
+  s.x = xm; s.v = 0; Emax = Math.max(energia(), 1e-12); disegna(); letture(true);
+});
+cv.c.addEventListener("pointerup", () => { trascino = false; cv.c.style.cursor = ""; });
+
+/* ============================ 4. PANNELLO ============================ */
+const fmt1 = v => virgola(v, 1), fmt0 = v => virgola(v, 0);
+const al = (c, v) => { p[c] = v; if (!anim.attiva) disegna(); letture(true); };
+Doll.titoletto(null, "Parametri");
+const sM  = Doll.slider(null, { label: "massa $m$ [kg]",         min: 0.2, max: 5,  step: 0.1, value: p.m,  fmt: fmt1, onInput: v => al("m", v) });
+const sK  = Doll.slider(null, { label: "costante $k$ [N/m]",     min: 1,   max: 50, step: 1,   value: p.k,  fmt: fmt0, onInput: v => al("k", v) });
+const sB  = Doll.slider(null, { label: "smorzamento $b$ [kg/s]", min: 0,   max: 10, step: 0.1, value: p.b,  fmt: fmt1, onInput: v => al("b", v) });
+const sF  = Doll.slider(null, { label: "forzante $F_0$ [N]",     min: 0,   max: 5,  step: 0.1, value: p.F0, fmt: fmt1, onInput: v => al("F0", v) });
+const sW  = Doll.slider(null, { label: "pulsazione $\\omega$ [rad/s]", min: 0, max: W_MAX, step: 0.1, value: p.w, fmt: fmt1, onInput: v => al("w", v) });
+// preset di smorzamento: b = 2 zeta sqrt(k m)
+const conZeta = z => sB.set(Math.round(2 * z * Math.sqrt(p.k * p.m) * 10) / 10);
+Doll.bottone(null, "$\\zeta=0{,}2$", () => conZeta(0.2));
+Doll.bottone(null, "$\\zeta=1$", () => conZeta(1));
+Doll.bottone(null, "$\\zeta=2$", () => conZeta(2));
+const sep = document.createElement("div"); document.getElementById("pannello").appendChild(sep);  // nuova riga di bottoni
+const anim = Doll.animazione(dt => { avanza(dt); disegna(); letture(); });
+Doll.bottone(null, "↺ Reset", () => { reset(); disegna(); letture(true); });
+
+Doll.titoletto(null, "Letture");
+const lW0 = Doll.lettura(null, "$\\omega_0=\\sqrt{k/m}$");
+const lZ  = Doll.lettura(null, "$\\zeta=b/2\\sqrt{km}$");
+const lE  = Doll.lettura(null, "energia $E$");
+const lA  = Doll.lettura(null, "regime: $A(\\omega)$, $\\varphi$");
+let ultimaLettura = 0;
+function letture(subito) {
+  const ora = performance.now(); if (!subito && ora - ultimaLettura < 100) return; ultimaLettura = ora;   // 10 Hz
+  const z = zeta(), reg = z < 1 - 1e-9 ? "sotto" : z > 1 + 1e-9 ? "sovra" : "critico";
+  lW0(celaRisposta ? "?" : `$${virgola(w0(), 2)}$ rad/s`);   // nel passo-domanda non si suggerisce la risposta
+  lZ(`$${virgola(z, 2)}$ <span class="doll-nota">(${reg === "critico" ? "critico" : reg + "smorzato"})</span>`);
+  lE(`$${virgola(energia(), 3)}$ J`);
+  lA(p.F0 > 0 ? `$${virgola(ampiezza(p.w), 3)}$ m, $${Math.round(sfasamento(p.w) * 180 / Math.PI)}^\\circ$` : "—");
+}
+
+/* ============================ 5. PERCORSO GUIDATO ============================ */
+// imposta i parametri, riparte da x0 e pre-simula `pre` secondi; poi l'animazione continua
+function scenario(o, x0, pre) {
+  for (const [sl, c] of [[sM, "m"], [sK, "k"], [sB, "b"], [sF, "F0"], [sW, "w"]]) if (o[c] !== undefined) sl.set(o[c]);
+  reset(x0); preSimula(pre); disegna(); letture(true); anim.play();
+}
+const BASE = { m: 1, k: 16 };                              // w0 = 4 rad/s, periodo T = 2 pi/w0 = 1,571 s
+// "Prova tu": con m = 4 kg (k = 16 N/m, b = 0,8 kg/s) la risonanza in ampiezza e' a w_r = w0 sqrt(1 - 2 zeta^2),
+// w0 = sqrt(k/m) = 2 rad/s, zeta = b/(2 sqrt(k m)) = 0,05  ->  w_r = 1,995 rad/s (SymPy).
+// Tolleranza 0,06 rad/s: con lo slider (passo 0,1) e' giusto solo w = 2,0 (a 1,9 o 2,1, Q = 10, A e' gia' ~70% del picco).
+// La verifica usa i parametri attuali: vale anche se lo studente cambia k o b (purche' ci sia un picco, zeta < 0,7).
+const wRis = () => w0() * Math.sqrt(Math.max(0, 1 - 2 * zeta() ** 2));
+const compito = Doll.bersaglio(null, { testo: "porta $m$ a 4 kg e $\\omega$ alla risonanza", ok: "Risonanza: $\\omega\\approx\\sqrt{k/m}=2$ rad/s",
+  verifica: () => p.F0 > 0 && Math.abs(p.m - 4) < 0.05 && zeta() < 0.7 && Math.abs(p.w - wRis()) < 0.06 });
+document.getElementById("pannello").prepend(compito.el);  // in cima al pannello, ben visibile
+let celaRisposta = false;
+const passo = (sc, x0, pre, prova = false, cela = false) => () => { celaRisposta = cela; compito.mostra(prova); scenario(sc, x0, pre); };
+Doll.guida([
+  { testo: "Senza attrito: oscilla a $\\omega_0$ ed $E$ resta costante",  applica: passo({ ...BASE, b: 0, F0: 0, w: 2 }, 0.5, 4) },
+  // prevedi: blocco spostato al doppio, simulazione ferma e grafico x(t) vuoto (la risposta non si vede ancora)
+  { testo: "Ampiezza doppia: il periodo cambia? Prevedi, poi Avanti",    applica: () => { passo({ ...BASE, b: 0, F0: 0, w: 2 }, 1, 0, false, true)(); anim.pausa(); } },
+  { testo: "No: stesso periodo $T=2\\pi/\\omega_0$, qualunque ampiezza",  applica: passo({ ...BASE, b: 0, F0: 0, w: 2 }, 1, 4) },
+  { testo: "Con attrito $E$ cala; se $\\zeta\\ge 1$ niente oscillazioni", applica: passo({ ...BASE, b: 1.6, F0: 0, w: 2 }, 0.5, 4) },
+  { testo: "Risonanza $\\omega\\approx\\omega_0$: $A$ massima, ritardo $90^\\circ$", applica: passo({ ...BASE, b: 0.8, F0: 2, w: 4 }, 0, 25) },
+  { testo: "Prova tu: con $m=4$ kg trova la nuova risonanza",           applica: passo({ ...BASE, b: 0.8, F0: 2, w: 1.5 }, 0, 20, true) },
+]);
+Doll.pronto();
+</script>
+</body>
+</html>

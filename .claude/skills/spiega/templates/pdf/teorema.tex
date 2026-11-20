@@ -1,0 +1,260 @@
+% =====================================================================
+%  TEMPLATE PDF: TEOREMA O CONCETTO  (esempio completo: teorema di Lagrange)
+% =====================================================================
+%  Come adattarlo
+%  - Copia in $P/dispensa.tex, cambia i contenuti, compila con
+%      .claude/skills/spiega/scripts/pdf_build.sh "$P"
+%    e guarda $P/dispensa_pagine.png con Read.
+%  - Per un CONCETTO usa \dolltitolo{...}{...}{Concetto} e "definizione" al posto di "teorema".
+%  - Sezioni OBBLIGATORIE, in quest'ordine (didattica: guide/didattica.md):
+%      titolo -> obiettivi (con prerequisiti) -> previsione -> enunciato (teorema o definizione, con TUTTE le ipotesi) -> idea
+%      (intuizione geometrica o fisica, collegata alla figura) -> figura dell'esempio
+%      -> perche' servono le ipotesi (un controesempio per ogni ipotesi importante)
+%      -> dimostrazione (completa se breve, altrimenti l'idea con i passaggi chiave)
+%      -> come si usa negli esercizi (metodo + un esempio svolto con "passo" e "risultato")
+%      -> preconcetto -> attenzione (errori tipici) -> nelvideo (se c'e' video o pagina interattiva)
+%      -> esercizio da completare (\vuoto) -> 2-3 esercizi con \risposta{...}
+%      -> autoverifica (3-5 domande con \soluzione{...}) -> ripasso.
+%  - FACOLTATIVE: corollari, definizioni collegate, osservazioni.
+%  - Lunghezza: 2-4 pagine. Completo ma senza riempitivi: niente storia, niente
+%    ripetizioni; ogni controesempio deve dire QUALE ipotesi manca e COSA va storto.
+%  - Verifica con SymPy ogni conto degli esempi (punto c, derivate, disuguaglianze).
+%  - Figure: \dollfigura{figure/f1.png}{...}, \dollfotogrammi[...]{f1 :: testo}{f2 :: testo}{f3 :: testo}
+%    (si estraggono con scripts/figure.py); se mancano compare un segnaposto.
+%    Grafici: pgfplots con lo stile [doll]; due blocchi affiancati: \dollaccanto[0.5]{...}{...}.
+% =====================================================================
+\documentclass[10pt]{article}
+\usepackage{doll}
+
+\begin{document}
+
+\dolltitolo{Il teorema di Lagrange}
+           {Analisi matematica I \textperiodcentered\ calcolo differenziale}
+           {Teorema}
+
+\begin{obiettivi}
+Saprai usare il teorema di Lagrange per dimostrare disuguaglianze e la monotonia di una funzione, e riconoscere
+quando non si può usare. \textbf{Prerequisiti}: la derivata come pendenza della tangente; il teorema di Rolle
+(richiamato più sotto).
+\end{obiettivi}
+
+\begin{previsione}
+Una curva va da $A$ a $B$ senza strappi e senza spigoli. Esiste per forza un punto in cui la tangente è
+parallela al segmento $AB$? E se la curva ha uno spigolo? Rispondi prima di andare avanti.
+\end{previsione}
+
+\begin{teorema}{di Lagrange (del valor medio)}
+Sia $f\colon [a, b] \to \R$, con $a < b$, tale che
+\begin{enumerate}[(i)]
+  \item $f$ è \textbf{continua} nell'intervallo chiuso $[a, b]$;
+  \item $f$ è \textbf{derivabile} nell'intervallo aperto $(a, b)$.
+\end{enumerate}
+Allora esiste (almeno) un punto $c \in (a, b)$ tale che
+\[
+  f'(c) = \frac{f(b) - f(a)}{b - a}.
+\]
+\end{teorema}
+
+\begin{idea}
+A destra c'è la pendenza della \emph{secante} che unisce $A = (a, f(a))$ e $B = (b, f(b))$; a sinistra
+la pendenza della \emph{tangente} in $c$. Il teorema dice che, se la curva è \guillemotleft senza strappi\guillemotright{}
+e \guillemotleft senza spigoli\guillemotright, da qualche parte la tangente è \textbf{parallela} alla secante.
+In cinematica: se in \qty{2}{\hour} percorri \qty{240}{\kilo\metre}, in almeno un istante il tachimetro ha segnato
+esattamente \qty{120}{\kilo\metre\per\hour} (è il principio del Tutor autostradale).
+\end{idea}
+
+\dollaccanto[0.42]{%
+\textbf{L'esempio della figura.} $f(x) = \sqrt{x}$ su $[0, 4]$: è continua in $[0, 4]$ e derivabile in $(0, 4)$
+(non in $0$, ma il teorema non lo chiede). La secante ha pendenza $\frac{2-0}{4-0} = \frac12$ e
+\[
+  f'(c) = \frac{1}{2\sqrt{c}} = \frac12 \iff c = 1 .
+\]
+La tangente in $(1, 1)$ è $y = \frac{x}{2} + \frac12$, parallela alla secante $y = \frac{x}{2}$.}{%
+\begin{tikzpicture}
+\begin{axis}[doll, width=\linewidth, height=0.66\linewidth,
+    xmin=-0.3, xmax=4.6, ymin=-0.3, ymax=2.9, xlabel={$x$}, ylabel={$y$},
+    xtick={0,1,4}, ytick={1,2}]
+  \addplot[dollblu, domain=0:4.4, samples=200, smooth] {sqrt(x)};
+  \addplot[dollarancio, domain=-0.2:4.5] {x/2} node[pos=0.62, below right=1pt, font=\small] {secante};
+  \addplot[dollverde, domain=-0.2:4.2] {x/2 + 0.5} node[pos=0.97, above left=-1pt, font=\small] {tangente};
+  \addplot[dolltenue, dashed, line width=0.6pt] coordinates {(1,0) (1,1)};
+  \addplot[only marks, mark=*, mark size=2.2pt, dolltesto] coordinates {(0,0) (4,2)};
+  \addplot[only marks, mark=*, mark size=2.4pt, dollrosso] coordinates {(1,1)};
+  \node[font=\small, above left] at (axis cs:0,0) {$A$};
+  \node[font=\small, below right] at (axis cs:4,2) {$B$};
+  \node[font=\small, dollrosso, above left=-1pt] at (axis cs:1,1) {$c$};
+\end{axis}
+\end{tikzpicture}
+\captionof{figure}{$f(x) = \sqrt x$ su $[0, 4]$: in $c = 1$ la tangente è parallela alla secante $AB$.}}
+
+\section{Perché servono le ipotesi}
+
+\begin{controesempio}[Manca la derivabilità: $f(x) = \abs{x}$ su {$[-1, 1]$}]
+\dollaccanto[0.66]{%
+$f$ è continua in $[-1, 1]$ ma non derivabile in $0 \in (-1, 1)$. La secante ha pendenza
+$\frac{f(1) - f(-1)}{2} = 0$, mentre $f'(x) = -1$ per $x<0$ e $f'(x) = 1$ per $x>0$:
+non esiste nessun $c$ con $f'(c) = 0$. Lo spigolo permette alla curva di \guillemotleft girare\guillemotright{}
+senza mai passare per una tangente orizzontale.}{%
+\begin{tikzpicture}
+\begin{axis}[doll, width=\linewidth, height=0.62\linewidth, xmin=-1.3, xmax=1.4, ymin=-0.25, ymax=1.35,
+    xtick={-1,1}, ytick=\empty, grid=none]
+  \addplot[dollblu, domain=-1:1, samples=3] {abs(x)};
+  \addplot[dollarancio] coordinates {(-1.2,1) (1.2,1)};
+  \addplot[only marks, mark=*, mark size=1.8pt, dolltesto] coordinates {(-1,1) (1,1)};
+\end{axis}
+\end{tikzpicture}}
+\end{controesempio}
+
+\begin{controesempio}[Manca la continuità in $b$]
+\dollaccanto[0.66]{%
+$f(x) = x$ per $x \in [0, 1)$ e $f(1) = 0$. In $(0, 1)$ è derivabile con $f'(x) = 1$, ma non è continua in $1$.
+La secante da $(0, 0)$ a $(1, 0)$ ha pendenza $0 \neq 1$: la conclusione è falsa. Basta un salto
+\emph{in un estremo} per rompere il teorema.}{%
+\begin{tikzpicture}
+\begin{axis}[doll, width=\linewidth, height=0.62\linewidth, xmin=-0.2, xmax=1.3, ymin=-0.25, ymax=1.25,
+    xtick={1}, ytick=\empty, grid=none]
+  \addplot[dollblu, domain=0:1] {x};
+  \addplot[dollarancio] coordinates {(-0.1,0) (1.2,0)};
+  \addplot[only marks, mark=*, mark size=1.8pt, dolltesto] coordinates {(0,0) (1,0)};
+  \addplot[only marks, mark=o, mark size=1.8pt, dollblu, line width=0.9pt] coordinates {(1,1)};
+\end{axis}
+\end{tikzpicture}}
+\end{controesempio}
+
+Le ipotesi sono \emph{sufficienti}, non necessarie: anche alcune funzioni che non le soddisfano hanno un punto $c$.
+E il teorema dice che $c$ \emph{esiste}, non che è unico né come trovarlo.
+
+\begin{preconcetto}
+\guillemotleft$c$ è il punto medio dell'intervallo\guillemotright\ oppure \guillemotleft$c$ è unico\guillemotright: falso.
+Per $\sqrt x$ su $[0, 4]$ il punto è $c = 1$, non $2$; per $\sin x$ su $[0, 2\pi]$ la secante è orizzontale e
+$\cos c = 0$ ha due soluzioni, $c = \pi/2$ e $c = 3\pi/2$. Il teorema garantisce che un $c$ esiste, non dove sia
+né quanti siano.
+\end{preconcetto}
+
+\section{Dimostrazione}
+
+\begin{teorema}{di Rolle}
+Se $g$ è continua in $[a, b]$, derivabile in $(a, b)$ e $g(a) = g(b)$, allora esiste $c \in (a, b)$ con $g'(c) = 0$.
+\end{teorema}
+
+\begin{dimostrazione}[Dimostrazione di Lagrange (tramite Rolle)]
+Sia $m = \frac{f(b) - f(a)}{b - a}$ e togliamo a $f$ la secante:
+\[
+  g(x) = f(x) - f(a) - m\,(x - a), \qquad x \in [a, b].
+\]
+$g$ è continua in $[a, b]$ e derivabile in $(a, b)$, perché differenza di $f$ e di un polinomio di primo grado.
+Inoltre $g(a) = 0$ e $g(b) = f(b) - f(a) - m(b-a) = 0$. Per il teorema di Rolle esiste $c \in (a, b)$ con
+$0 = g'(c) = f'(c) - m$, cioè $f'(c) = m$.
+Geometricamente $g(x)$ è la distanza verticale tra la curva e la secante: dove è massima (o minima), la
+tangente alla curva è parallela alla secante.
+\end{dimostrazione}
+
+\section{Come si usa negli esercizi}
+
+\begin{metodo}[Metodo: disuguaglianze con Lagrange]
+  \item \textbf{Riconosci} nella disuguaglianza una differenza $f(b) - f(a)$ (o un rapporto incrementale).
+  \item \textbf{Scegli} $f$ e l'intervallo $[a, b]$, e \textbf{verifica le ipotesi} per iscritto: continuità nel chiuso, derivabilità nell'aperto.
+  \item \textbf{Scrivi} $f(b) - f(a) = f'(c)\,(b - a)$ con $c \in (a, b)$ incognito.
+  \item \textbf{Stima} $f'(c)$ usando solo $a < c < b$ (di solito $f'$ è monotona) e riporta la stima, attento al segno di $b - a$.
+\end{metodo}
+
+Due conseguenze da sapere, entrambe con Lagrange su $[x_1, x_2] \subseteq I$, con $I$ \textbf{intervallo}:
+se $f' > 0$ in $I$, allora $f(x_2) - f(x_1) = f'(c)(x_2 - x_1) > 0$, cioè $f$ è strettamente crescente;
+se $f' = 0$ in $I$, allora $f$ è costante in $I$.
+
+\begin{definizione}{funzione lipschitziana}
+$f$ è lipschitziana di costante $M$ su $I$ se $\abs{f(x) - f(y)} \le M\abs{x - y}$ per ogni $x, y \in I$.
+Per Lagrange, se $f$ è derivabile in un intervallo con $\abs{f'} \le M$, allora è lipschitziana di costante $M$:
+ad esempio $\abs{\sin x - \sin y} = \abs{\cos c}\,\abs{x - y} \le \abs{x - y}$.
+\end{definizione}
+
+\begin{esempio}[Esempio svolto]
+Dimostrare che $\dfrac{x}{1+x} < \ln(1+x) < x$ per ogni $x > 0$.
+\end{esempio}
+\azzerapassi
+\begin{passo}{Scelta della funzione e verifica delle ipotesi}
+Prendiamo $f(t) = \ln(1+t)$ su $[0, x]$: è continua in $[0, x]$ e derivabile in $(0, x)$, con $f'(t) = \frac{1}{1+t}$.
+\perche{$\ln(1+x) = f(x) - f(0)$ è proprio una differenza di valori di $f$, e $1+t > 0$ sull'intervallo.}
+\end{passo}
+\begin{passo}{Applicazione del teorema}
+Esiste $c \in (0, x)$ tale che $\ln(1+x) - \ln 1 = f'(c)\,(x - 0)$, cioè $\ln(1+x) = \dfrac{x}{1+c}$.
+\perche{il teorema trasforma la differenza in un prodotto, in cui l'unica incognita è $c$.}
+\end{passo}
+\begin{passo}{Stima di $f'(c)$}
+Da $0 < c < x$ segue $1 < 1 + c < 1 + x$, quindi $\dfrac{1}{1+x} < \dfrac{1}{1+c} < 1$. Moltiplichiamo per $x > 0$.
+\perche{non conosciamo $c$, ma sappiamo dove sta; e $t \mapsto \frac{1}{1+t}$ è decrescente, quindi è compresa tra i valori agli estremi.}
+\end{passo}
+\begin{risultato}
+$\displaystyle \frac{x}{1+x} < \ln(1+x) < x \qquad \text{per ogni } x > 0.$
+\end{risultato}
+
+\begin{attenzione}
+\begin{itemize}
+  \item \textbf{Verifica le ipotesi per iscritto}, soprattutto la continuità agli estremi e la derivabilità all'interno
+        (moduli, radici in $0$, funzioni definite a tratti). Senza ipotesi verificate l'esercizio vale zero.
+  \item \textbf{$c$ dipende da $a$ e $b$} ed è nell'intervallo \emph{aperto}: non sostituire $c = a$ o $c = b$, e non trattarlo come una costante fissa.
+  \item \textbf{Serve un intervallo.} $F(x) = \arctan x + \arctan\frac1x$ ha $F' = 0$ su $\R\setminus\{0\}$, ma non è costante:
+        vale $\frac{\pi}{2}$ per $x > 0$ e $-\frac{\pi}{2}$ per $x < 0$. Il corollario va applicato su ciascun intervallo separatamente.
+  \item \textbf{$f'(x_0) > 0$ in un solo punto} non basta per dire che $f$ è crescente vicino a $x_0$: serve $f' > 0$ su tutto un intervallo.
+\end{itemize}
+\end{attenzione}
+
+\section{Nel video e nella pagina interattiva}
+
+\begin{nelvideo}[finale.mp4, interattivo.html]
+\momento{0:04}{compare la secante $AB$, che resta ferma: è il membro destro del teorema.}
+\momento{0:10}{la tangente scorre lungo la curva; il valore di $f'(x)$ cambia in diretta.}
+\momento{0:21}{in $c = 1$ la tangente diventa parallela alla secante (è il punto rosso della figura 1).}
+\statoweb{3}{trascina $b$: il punto $c$ si sposta, cioè dipende dall'intervallo.}
+\end{nelvideo}
+
+\dollfotogrammi[La tangente che scorre fino a diventare parallela alla secante.]
+  {figure/f1.png :: la secante}
+  {figure/f2.png :: la tangente scorre}
+  {figure/f3.png :: parallele in $c$}
+
+\dollfigura[0.5]{figure/f4.png}{La pagina interattiva: il controesempio $\abs{x}$.}
+
+\section{Esercizi per allenarsi}
+
+\begin{esercizio}[da completare]
+Dimostrare che $\abs{\sin a - \sin b} \le \abs{a - b}$ per ogni $a, b$. Completa i passi.
+$f(t) = \sin t$ è continua e derivabile su $\R$, quindi per Lagrange $\sin a - \sin b = \vuoto \cdot (a - b)$
+con $c$ tra $a$ e $b$. Poiché $\abs{\cos c} \le \vuoto[2em]$, si conclude.
+\risposta{$\sin a - \sin b = \cos c\,(a - b)$ e $\abs{\cos c} \le 1$, quindi $\abs{\sin a - \sin b} = \abs{\cos c}\,\abs{a - b} \le \abs{a - b}$.}
+\end{esercizio}
+
+\begin{esercizio}[trovare $c$]
+Verificare che $f(x) = x^3 - 3x$ soddisfa le ipotesi del teorema di Lagrange su $[0, 2]$ e trovare i punti $c$.
+\risposta{$f$ è un polinomio: continua e derivabile ovunque. Pendenza della secante: $\frac{f(2) - f(0)}{2} = \frac{2 - 0}{2} = 1$.
+$f'(c) = 3c^2 - 3 = 1 \iff c^2 = \frac43 \iff c = \pm\frac{2}{\sqrt3}$; nell'intervallo $(0, 2)$ c'è solo $c = \frac{2}{\sqrt3} \approx \num{1.155}$.}
+\end{esercizio}
+
+\begin{esercizio}[disuguaglianza]
+Dimostrare che $\e^x \ge 1 + x$ per ogni $x \in \R$.
+\risposta{Per $x = 0$ vale l'uguaglianza. Per $x > 0$, Lagrange su $[0, x]$: $\e^x - 1 = \e^c\,x$ con $0 < c < x$, e $\e^c > 1$, quindi
+$\e^x - 1 > x$. Per $x < 0$, su $[x, 0]$: $1 - \e^x = \e^c\,(0 - x)$ con $x < c < 0$, quindi $\e^c < 1$ e $1 - \e^x < -x$, cioè $\e^x > 1 + x$.}
+\end{esercizio}
+
+\begin{esercizio}[esiste o no?]
+Esiste una funzione derivabile su $\R$ con $f(0) = 0$, $f(2) = 5$ e $\abs{f'(x)} \le 2$ per ogni $x$?
+\risposta{No. Per Lagrange su $[0, 2]$ esisterebbe $c$ con $f'(c) = \frac{5 - 0}{2} = \frac52 > 2$, contro l'ipotesi $\abs{f'} \le 2$.}
+\end{esercizio}
+
+\begin{autoverifica}
+\item Perché il teorema chiede la derivabilità solo nell'intervallo \emph{aperto}?
+  \soluzione{Il punto $c$ sta all'interno, ed è lì che serve la tangente; agli estremi basta la continuità. Per questo vale anche per $\sqrt x$ su $[0, 4]$, che non è derivabile in $0$.}
+\item $f(x) = \abs{x}$ su $[-1, 1]$: quale ipotesi manca e che cosa va storto?
+  \soluzione{Manca la derivabilità in $0$. La secante è orizzontale, ma $f'$ vale $-1$ o $+1$: nessun $c$ ha $f'(c) = 0$.}
+\item Se $f' > 0$ su un intervallo, perché $f$ è crescente?
+  \soluzione{Per $x_1 < x_2$ nell'intervallo, Lagrange dà $f(x_2) - f(x_1) = f'(c)(x_2 - x_1) > 0$.}
+\end{autoverifica}
+
+\begin{ripasso}
+\begin{itemize}
+  \item Enuncia il teorema con tutte le ipotesi e disegnane il significato (secante e tangente).
+  \item Dimostra con Lagrange che $\ln(1 + x) < x$ per $x > 0$, senza guardare l'esempio svolto.
+\end{itemize}
+\end{ripasso}
+
+\end{document}

@@ -1,0 +1,661 @@
+<!doctype html>
+<!--
+TEMPLATE WEB: elettronica digitale (WaveDrom + SVG disegnato a mano).
+Elettronica dei sistemi digitali, Elettronica, Calcolatori: logica combinatoria, flip-flop,
+contatori, macchine a stati. Quattro viste (select "Vista" nel pannello):
+  1. rete combinatoria in SVG (porte AND/OR/NOT/XOR/NAND/NOR/XNOR con le forme giuste),
+     ingressi cliccabili, fili colorati col valore logico, tabella di verità con la riga attuale;
+  2. flip-flop D: diagramma temporale WaveDrom, la traccia D si cambia cliccandoci sopra,
+     Q campiona D sul fronte di salita (fronte evidenziato + simbolo del flip-flop);
+  3. contatore a 3 bit (avanti/indietro, modulo M): WaveDrom clk, Q0, Q1, Q2, valore;
+  4. macchina a stati di Moore (riconoscitore della sequenza 101 con sovrapposizione):
+     stati come cerchi, archi curvi con l'ingresso, stato attuale e prossima transizione
+     evidenziati, bottone "Clock", e il nastro temporale (WaveDrom) di x, stato, y.
+
+COME ADATTARLO
+- Rete combinatoria: aggiungi un oggetto in CIRCUITI (ingressi con y, porte con tipo, posizione,
+  ingressi, uscita e, se serve, le x delle colonne di instradamento "xm"; uscite con y).
+  Fili, puntini di diramazione, valori e tabella di verità vengono generati da soli.
+  Porte a 3 ingressi: funzionano (pin distribuiti sull'altezza 50).
+- Macchina a stati: cambia FSM.stati (posizione, uscita di Moore, significato) e FSM.archi
+  (da, a, ingresso, curvatura "c" o angolo "ang" per gli anelli). La funzione di transizione
+  si ricava dagli archi: non va scritta due volte. Per una Mealy scrivi "x/y" sugli archi.
+- WaveDrom: WaveDrom.RenderWaveForm(indice, sorgente, "wd", false) disegna nel div con
+  id = "wd" + indice (vedi onda()). Ogni carattere = 40 px a hscale 1; scalaOnda() lo adatta.
+
+Idee simili: mappe di Karnaugh (griglia 4x4 con gruppi colorati che seguono la tabella),
+multiplexer e decoder, sommatore a propagazione di riporto (catena di full adder),
+registro a scorrimento (WaveDrom con D in cascata), Moore vs Mealy (stessa sequenza, uscita
+anticipata di un colpo), tempi di setup/hold e ritardo di propagazione (WaveDrom con "node" e
+"edge" per le frecce tra eventi), alee statiche (glitch in uscita con ritardi diversi),
+contatore asincrono (ripple), corrispondenza con VHDL/Verilog (process/always @(posedge clk)
+in un pannello di codice accanto alla vista).
+
+Regole: titolo breve, dati in .doll-dati, didascalie <= ~12 parole, Doll.guida per il percorso
+guidato (ogni passo = uno stato fotografato dal controllo), Doll.pronto() alla fine.
+Guida: prevedi -> osserva -> spiega (passo 4 chiede se dopo "101" i bit 0, 1 riaccendono y, passo 5 lo
+mostra: sovrapposizione), ultimo passo "Prova tu" con Doll.bersaglio sul contatore (mod 6 indietro, N = 4).
+Build:  .venv/bin/python .claude/skills/spiega/scripts/web_build.py pagina.html
+Check:  .venv/bin/python .claude/skills/spiega/scripts/web_check.py interattivo.html
+NOTA: lo stile del WaveDrom contiene la regola globale "text{font-size:11pt;font-family:Helvetica}":
+i <text> dei nostri SVG vanno stilizzati con selettori più specifici (svg.dg text), non con
+gli attributi font-size (il CSS vince sugli attributi). Classi nostre con prefisso dg- (il
+WaveDrom usa .h1 .info .s1 ... globali).
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logica digitale</title>
+<!-- doll:lib wavedrom -->
+<style>
+  .dg-modo { position: absolute; inset: 0; display: none; flex-direction: column; gap: 10px; padding: 14px 18px; overflow: auto; }
+  .dg-modo.attivo { display: flex; }
+  .dg-tit { font-weight: 650; font-size: 15px; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .dg-tit .doll-nota { font-weight: 400; }
+  .dg-riga { flex: 1; display: flex; gap: 18px; min-height: 0; align-items: center; }
+  .dg-riga > svg { flex: 1.7; min-width: 0; height: 100%; max-height: 520px; }
+  .dg-tabella { flex: 1; max-width: 250px; min-width: 200px; }
+  .dg-tabella table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .dg-tabella th, .dg-tabella td { text-align: center; padding: 3px 6px; border-bottom: 1px solid var(--bordo); }
+  .dg-tabella th { font-weight: 600; color: var(--tenue); }
+  .dg-tabella .sep { border-left: 2px solid var(--bordo); }
+  .dg-tabella tr.riga { cursor: pointer; }
+  .dg-tabella tr.riga:hover td { background: #f4f2ec; }
+  .dg-tabella tr.attuale td { background: #fdebd8; font-weight: 700; }
+  .dg-onda { width: 100%; }
+  .dg-onda svg { display: block; margin: 0 auto; }
+  .dg-legenda { font-size: 13px; color: var(--tenue); }
+  .dg-legenda i { display: inline-block; width: 18px; height: 4px; vertical-align: middle; margin: 0 5px 0 10px; border-radius: 2px; }
+  .dg-box { display: flex; flex-direction: column; gap: 12px; }
+  .dg-box[hidden] { display: none; }
+  svg.dg { display: block; width: 100%; }
+  svg.dg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+                font-size: 15px; fill: var(--testo); font-weight: 500; }
+  svg.dg text.dg-pic { font-size: 12px; fill: var(--tenue); }
+  svg.dg text.dg-val { font-size: 16px; font-weight: 700; }
+  svg.dg text.dg-nome { font-size: 17px; font-weight: 650; font-style: italic; }
+  svg.dg text.dg-grande { font-size: 30px; font-weight: 700; }
+  svg.dg text.dg-arco { font-size: 15px; font-weight: 700; }
+  svg.dg .dg-click { cursor: pointer; }
+  /* sovrapposizione sul WaveDrom (fronte evidenziato) */
+  @media (max-width: 820px) {           /* telefono: circuito sopra, tabella sotto */
+    .dg-riga { flex-direction: column; align-items: stretch; }
+    .dg-riga > svg { flex: none; height: auto; }
+    .dg-tabella { max-width: none; }
+    .doll-vista { min-height: 520px; }
+  }
+  .dg-onda text.dg-ov { font-size: 12px; fill: #dd6b20; font-weight: 700; font-family: inherit; }
+</style>
+</head>
+<body>
+<header class="doll-top">
+  <h1>Logica digitale</h1>
+  <div class="doll-dati" id="dati"></div>
+</header>
+<main class="doll-main">
+  <section class="doll-vista" id="vista">
+    <!-- 1. rete combinatoria -->
+    <div class="dg-modo" id="v-comb">
+      <div class="dg-tit"><span id="comb-nome"></span><span class="doll-nota">clicca sugli ingressi o su una riga della tabella</span></div>
+      <div class="dg-riga">
+        <svg class="dg" id="circ"></svg>
+        <div class="dg-tabella"><table id="tv"></table></div>
+      </div>
+      <div class="dg-legenda">filo<i style="background:#dd6b20"></i>1<i style="background:#a3a3a8"></i>0
+        &nbsp;&nbsp;● = diramazione</div>
+    </div>
+    <!-- 2. flip-flop D -->
+    <div class="dg-modo" id="v-ff">
+      <div class="dg-tit">Flip-flop D, fronte di salita<span class="doll-nota">clicca sulla traccia D per cambiarla</span></div>
+      <div class="dg-onda" id="wd0"></div>
+      <svg class="dg" id="ffsimb" viewBox="0 0 640 180" style="max-height:230px"></svg>
+    </div>
+    <!-- 3. contatore -->
+    <div class="dg-modo" id="v-cont">
+      <div class="dg-tit">Contatore sincrono a 3 bit<span class="doll-nota" id="cont-nota"></span></div>
+      <div class="dg-onda" id="wd1"></div>
+      <svg class="dg" id="lampade" viewBox="0 0 640 150" style="max-height:200px"></svg>
+    </div>
+    <!-- 4. macchina a stati -->
+    <div class="dg-modo" id="v-fsm">
+      <div class="dg-tit">Macchina di Moore: riconosce 101</div>
+      <svg class="dg" id="fsm" viewBox="0 55 820 275" style="flex:1;min-height:0;max-height:400px"></svg>
+      <div class="dg-onda" id="wd2"></div>
+    </div>
+  </section>
+  <aside class="doll-pannello" id="pannello"></aside>
+</main>
+<footer class="doll-didascalia" id="didascalia"></footer>
+
+<script>
+const C = Doll.col;
+const UNO = C.arancio, ZERO = "#a3a3a8";           // colori dei valori logici
+const NS = "http://www.w3.org/2000/svg";
+const $ = id => document.getElementById(id);
+
+// ---------- piccoli helper SVG (non ci sono in doll.js) ----------
+function el(tag, attr, padre) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attr) e.setAttribute(k, attr[k]);
+  if (padre) padre.appendChild(e);
+  return e;
+}
+// testo con pedice e negazione: "C_in" -> C con "in" in basso; "~Q = 1" -> Q soprassegnato, poi " = 1"
+// (pedice e negazione riguardano la prima parola, fino al primo spazio)
+function testo(padre, x, y, t, attr = {}) {
+  const e = el("text", { x, y, ...attr }, padre);
+  let neg = false;
+  if (t.startsWith("~")) { neg = true; t = t.slice(1); }
+  const sp = t.indexOf(" "), parola = sp < 0 ? t : t.slice(0, sp), resto = sp < 0 ? "" : t.slice(sp);
+  const [base, sub] = parola.split("_");
+  const b = el("tspan", neg ? { "text-decoration": "overline" } : {}, e); b.textContent = base;
+  if (sub !== undefined) {
+    const s = el("tspan", { dy: 5, style: "font-size:70%" }, e); s.textContent = sub;
+    const r = el("tspan", { dy: -5 }, e); r.textContent = resto || "\u200b";   // torna sulla linea di base
+  } else if (resto) el("tspan", {}, e).textContent = resto;
+  return e;
+}
+const coloreV = v => (v === 1 ? UNO : ZERO);           // colore dei fili
+const coloreT = v => (v === 1 ? UNO : C.grigio);       // colore delle scritte (0 più leggibile)
+function setDati(tex) { const d = $("dati"); d.innerHTML = tex; Doll.tex(d); }
+
+// =====================================================================
+// 1. RETE COMBINATORIA
+// =====================================================================
+// Forme delle porte in un riquadro alto 50 (x, y = angolo in alto a sinistra).
+// out = pin d'uscita; inX(dy) = x del pin d'ingresso all'altezza dy (OR/XOR hanno il dorso curvo).
+const dorso = dy => 30 * (1 - dy / 50) * (dy / 50);   // curva Q (0,50)-(15,25)-(0,0)
+const FORME = {
+  AND: { d: "M0,0 H28 A25,25 0 0 1 28,50 H0 Z", out: 53, inX: () => 0 },
+  OR:  { d: "M0,0 C25,0 42,8 55,25 C42,42 25,50 0,50 Q15,25 0,0 Z", out: 55, inX: dorso },
+  XOR: { d: "M8,0 C33,0 50,8 63,25 C50,42 33,50 8,50 Q23,25 8,0 Z", extra: "M0,50 Q15,25 0,0", out: 63, inX: dorso },
+  NOT: { d: "M0,8 L36,25 L0,42 Z", out: 36, inX: () => 0 },
+};
+// le versioni negate: stessa forma + pallino
+for (const [neg, base] of [["NAND", "AND"], ["NOR", "OR"], ["XNOR", "XOR"]]) FORME[neg] = { ...FORME[base], bolla: true };
+FORME.NOT.bolla = true;
+const LOGICA = {
+  AND: a => a.every(v => v) ? 1 : 0, OR: a => a.some(v => v) ? 1 : 0, XOR: a => a.reduce((s, v) => s ^ v, 0),
+  NOT: a => 1 - a[0],
+};
+LOGICA.NAND = a => 1 - LOGICA.AND(a); LOGICA.NOR = a => 1 - LOGICA.OR(a); LOGICA.XNOR = a => 1 - LOGICA.XOR(a);
+const outX = g => FORME[g.t].out + (FORME[g.t].bolla ? 10 : 0);
+
+const X_IN = 62, X_LAMPADA = 650;   // pin degli ingressi, centro delle lampadine d'uscita
+// Circuiti: ingressi (nome, y), porte (in ordine topologico), uscite. xm = colonna dove il filo
+// scende/sale verso il pin (null = filo dritto se le y coincidono, altrimenti a metà strada).
+const CIRCUITI = {
+  sommatore: {
+    nome: "Sommatore completo (full adder)",
+    dati: "$S=A\\oplus B\\oplus C_{in},\\quad C_{out}=AB+C_{in}\\,(A\\oplus B)$",
+    ingressi: [{ n: "A", y: 80 }, { n: "B", y: 150 }, { n: "C_in", y: 290 }],
+    porte: [
+      { t: "XOR", x: 200, y: 90,  in: ["A", "B"], xm: [120, 140], out: "P" },
+      { t: "AND", x: 200, y: 200, in: ["A", "B"], xm: [100, 160], out: "G" },
+      { t: "XOR", x: 420, y: 150, in: ["P", "C_in"], xm: [320, 360], out: "S" },
+      { t: "AND", x: 420, y: 255, in: ["P", "C_in"], xm: [300, null], out: "T" },
+      { t: "OR",  x: 540, y: 245, in: ["G", "T"], xm: [500, null], out: "C_out" },
+    ],
+    uscite: [{ n: "S", y: 175 }, { n: "C_out", y: 270 }],
+    // riga di verifica: la somma aritmetica
+    verifica: v => `$${v.A}+${v.B}+${v.C_in}=${v.A + v.B + v.C_in}=(${v.C_out}${v.S})_2$`,
+  },
+  mux: {
+    nome: "Multiplexer 2:1",
+    dati: "$Y=\\overline{S}\\,A+S\\,B$",
+    ingressi: [{ n: "A", y: 110 }, { n: "S", y: 200 }, { n: "B", y: 290 }],
+    porte: [
+      { t: "NOT", x: 140, y: 175, in: ["S"], out: "~S" },
+      { t: "AND", x: 300, y: 95,  in: ["A", "~S"], xm: [null, 240], out: "U" },
+      { t: "AND", x: 300, y: 255, in: ["S", "B"], xm: [100, null], out: "W" },
+      { t: "OR",  x: 480, y: 170, in: ["U", "W"], xm: [430, 440], out: "Y" },
+    ],
+    uscite: [{ n: "Y", y: 195 }],
+    verifica: v => (v.S ? `$S=1$: $Y=B=${v.B}$` : `$S=0$: $Y=A=${v.A}$`),
+  },
+};
+let circ = CIRCUITI.sommatore;
+let ingr = { A: 1, B: 1, C_in: 0 };
+
+function valuta(inp) {
+  const v = { ...inp };
+  for (const g of circ.porte) v[g.out] = LOGICA[g.t](g.in.map(s => v[s]));
+  return v;
+}
+function pinIn(g, k) {
+  const n = g.in.length, dy = n === 1 ? 25 : n === 2 ? [15, 35][k] : 50 * (k + 1) / (n + 1);
+  return [g.x + FORME[g.t].inX(dy), g.y + dy];
+}
+const pinOut = g => [g.x + outX(g), g.y + 25];
+function sorgente(s) {
+  const i = circ.ingressi.find(q => q.n === s);
+  if (i) return [X_IN, i.y];
+  return pinOut(circ.porte.find(g => g.out === s));
+}
+// tutti i fili: {s: segnale, a: partenza, b: arrivo, xm}
+function fili() {
+  const L = [];
+  for (const g of circ.porte) g.in.forEach((s, k) => L.push({ s, a: sorgente(s), b: pinIn(g, k), xm: g.xm?.[k] }));
+  for (const u of circ.uscite) L.push({ s: u.n, a: sorgente(u.n), b: [X_LAMPADA - 14, u.y], xm: u.xm });
+  for (const w of L) {
+    w.dritto = Math.abs(w.a[1] - w.b[1]) < 0.5;
+    w.gx = w.dritto ? w.b[0] : (w.xm ?? (w.a[0] + w.b[0]) / 2);   // dove lascia l'orizzontale
+    w.dir = Math.sign(w.b[1] - w.a[1]);
+  }
+  return L;
+}
+// puntini di diramazione: dove un filo gira mentre un altro dello stesso segnale prosegue
+function puntini(L) {
+  const P = [];
+  for (const w of L) {
+    if (w.dritto) continue;
+    for (const z of L) {
+      if (z === w || z.s !== w.s) continue;
+      if (z.gx > w.gx + 0.5 || (Math.abs(z.gx - w.gx) < 0.5 && !z.dritto && z.dir !== w.dir)) P.push([w.gx, w.a[1]]);
+      // stesse colonna e direzione: il più corto gira in orizzontale a metà del più lungo
+      if (Math.abs(z.gx - w.gx) < 0.5 && z.dir === w.dir && Math.abs(z.b[1] - z.a[1]) > Math.abs(w.b[1] - w.a[1])) P.push([w.gx, w.b[1]]);
+    }
+  }
+  return P;
+}
+function disegnaComb() {
+  const svg = $("circ"); svg.innerHTML = "";
+  const v = valuta(ingr), L = fili();
+  // fili (sotto le porte)
+  for (const w of L) {
+    const pts = w.dritto ? [w.a, w.b] : [w.a, [w.gx, w.a[1]], [w.gx, w.b[1]], w.b];
+    el("polyline", { points: pts.map(p => p.join(",")).join(" "), fill: "none", stroke: coloreV(v[w.s]),
+      "stroke-width": v[w.s] ? 3.5 : 2.5, "stroke-linejoin": "round" }, svg);
+  }
+  for (const [x, y] of puntini(L)) {
+    const s = L.find(w => !w.dritto && Math.abs(w.gx - x) < 0.5 && (Math.abs(w.a[1] - y) < 0.5 || Math.abs(w.b[1] - y) < 0.5));
+    el("circle", { cx: x, cy: y, r: 4.5, fill: coloreV(v[s.s]) }, svg);
+  }
+  // porte
+  for (const g of circ.porte) {
+    const F = FORME[g.t], gr = el("g", { transform: `translate(${g.x},${g.y})` }, svg), on = v[g.out];
+    el("path", { d: F.d, fill: on ? "#fff6ee" : "#fff", stroke: C.testo, "stroke-width": 2.2, "stroke-linejoin": "round" }, gr);
+    if (F.extra) el("path", { d: F.extra, fill: "none", stroke: C.testo, "stroke-width": 2.2 }, gr);
+    if (F.bolla) el("circle", { cx: F.out + 5, cy: 25, r: 5, fill: "#fff", stroke: C.testo, "stroke-width": 2.2 }, gr);
+    testo(gr, outX(g) / 2 - 2, 64, g.t, { class: "dg-pic", "text-anchor": "middle" });
+    // valore del segnale interno accanto all'uscita (le uscite finali hanno la lampadina)
+    if (!circ.uscite.some(u => u.n === g.out)) {
+      const [ox, oy] = pinOut(g);
+      testo(svg, ox + 6, oy - 8, `${g.out} = ${on}`, { class: "dg-pic", style: `fill:${on ? C.arancio : C.grigio};font-weight:700` });
+    }
+  }
+  // ingressi: nome + interruttore cliccabile
+  for (const i of circ.ingressi) {
+    const on = ingr[i.n], gr = el("g", { class: "dg-click" }, svg);
+    el("rect", { x: X_IN - 32, y: i.y - 16, width: 32, height: 32, rx: 6, fill: on ? UNO : "#fff", stroke: on ? UNO : C.grigio, "stroke-width": 2 }, gr);
+    testo(gr, X_IN - 16, i.y + 6, String(on), { class: "dg-val", "text-anchor": "middle", style: `fill:${on ? "#fff" : C.testo}` });
+    testo(svg, X_IN - 40, i.y + 6, i.n, { class: "dg-nome", "text-anchor": "end" });
+    gr.addEventListener("click", () => { ingr[i.n] = 1 - ingr[i.n]; aggiornaComb(); });
+  }
+  // uscite: lampadine
+  for (const u of circ.uscite) {
+    const on = v[u.n];
+    el("circle", { cx: X_LAMPADA, cy: u.y, r: 14, fill: on ? UNO : "#fff", stroke: on ? UNO : C.grigio, "stroke-width": 2.5 }, svg);
+    testo(svg, X_LAMPADA, u.y + 6, String(on), { class: "dg-val", "text-anchor": "middle", style: `fill:${on ? "#fff" : C.testo}` });
+    testo(svg, X_LAMPADA + 22, u.y + 6, u.n, { class: "dg-nome" });
+  }
+  // viewBox adattato al contenuto (funziona per qualunque circuito)
+  const bb = svg.getBBox();
+  if (bb.width) svg.setAttribute("viewBox", `${bb.x - 12} ${bb.y - 12} ${bb.width + 24} ${bb.height + 24}`);
+}
+// tabella di verità con la riga attuale evidenziata (riga cliccabile = imposta gli ingressi)
+function disegnaTabella() {
+  const t = $("tv"), ni = circ.ingressi.length, nomi = circ.ingressi.map(i => i.n);
+  const th = n => n.includes("_") ? `${n.split("_")[0]}<sub>${n.split("_")[1]}</sub>` : n.startsWith("~") ? `<span style="text-decoration:overline">${n.slice(1)}</span>` : n;
+  let h = "<tr>" + nomi.map(th).map(n => `<th>${n}</th>`).join("") +
+          circ.uscite.map((u, k) => `<th class="${k ? "" : "sep"}">${th(u.n)}</th>`).join("") + "</tr>";
+  for (let r = 0; r < 2 ** ni; r++) {
+    const inp = {}; nomi.forEach((n, k) => (inp[n] = (r >> (ni - 1 - k)) & 1));
+    const v = valuta(inp), att = nomi.every(n => inp[n] === ingr[n]);
+    h += `<tr class="riga${att ? " attuale" : ""}" data-r="${r}">` + nomi.map(n => `<td>${inp[n]}</td>`).join("") +
+         circ.uscite.map((u, k) => `<td class="${k ? "" : "sep"}">${v[u.n]}</td>`).join("") + "</tr>";
+  }
+  t.innerHTML = h;
+  t.querySelectorAll("tr.riga").forEach(tr => tr.addEventListener("click", () => {
+    const r = +tr.dataset.r; nomi.forEach((n, k) => (ingr[n] = (r >> (ni - 1 - k)) & 1)); aggiornaComb();
+  }));
+}
+
+// =====================================================================
+// 2. FLIP-FLOP D (WaveDrom)
+// =====================================================================
+// 3 caselle per periodo di clock (spp); fronte di salita all'inizio di ogni periodo.
+// Q prende il valore che D aveva APPENA PRIMA del fronte (casella k*spp-1): rispetta il setup.
+// Con 3 caselle D può fare un impulso tra due fronti (0 1 0) che Q non vede.
+const D_INIZ = [0,0,1, 1,1,0, 0,1,0, 0,1,1, 1,0,1, 1,0,0];
+const FF = { spp: 3, D: D_INIZ.slice(), fronte: 3 };
+function qFF() {
+  const Q = []; let q = "x";
+  for (let s = 0; s < FF.D.length; s++) { if (s % FF.spp === 0 && s > 0) q = FF.D[s - 1]; Q.push(q); }
+  return Q;
+}
+// bit -> stringa WaveDrom ("0011" -> "0.1.")
+const onda = bits => bits.map((b, i) => (i && b === bits[i - 1] ? "." : String(b))).join("");
+
+// disegna con WaveDrom nel div "wd"+indice e scala alla larghezza disponibile
+function disegnaOnda(indice, sorgente) {
+  WaveDrom.RenderWaveForm(indice, sorgente, "wd", false);
+  scalaOnda(indice);
+  return $("wd" + indice).querySelector("svg");
+}
+function scalaOnda(indice) {
+  const box = $("wd" + indice), svg = box.querySelector("svg"); if (!svg) return;
+  const [, , w, h] = svg.getAttribute("viewBox").split(" ").map(Number);
+  // non più largo del riquadro, testo al massimo 1,3 volte, al massimo ~40% dell'altezza della vista
+  const s = Math.min(1.3, (box.clientWidth - 4) / w, 0.42 * $("vista").clientHeight / h);
+  svg.setAttribute("width", w * s); svg.setAttribute("height", h * s);
+}
+// geometria del WaveDrom: gruppo delle tracce, y di ogni traccia, larghezza di una casella
+function geomOnda(indice, nCaselle) {
+  const lanes = $("lanes_" + indice);
+  const y = [...lanes.querySelectorAll(`[id^="wavelane_"][id$="_${indice}"]`)]
+    .filter(g => !g.id.includes("draw")).map(g => +/translate\([^,]+,\s*([-\d.]+)/.exec(g.getAttribute("transform"))[1]);
+  const bw = $(`wavelane_draw_0_${indice}`).getBBox().width;
+  return { indice, lanes, y, sw: bw > 0 ? Math.round(bw / nCaselle) : 40 };   // 40 px = default hscale 1
+}
+// banda verticale che evidenzia un istante (un fronte) su tutte le tracce
+// (allunga l'SVG di 18 px in basso per l'etichetta, poi riscala)
+function banda(G, x, etichetta) {
+  const h = G.y[G.y.length - 1] + 24, g = el("g", {}, G.lanes);
+  el("rect", { x: x - 5, y: -2, width: 10, height: h, fill: C.arancio, "fill-opacity": 0.18 }, g);
+  el("line", { x1: x, y1: -2, x2: x, y2: h, stroke: C.arancio, "stroke-width": 1.5, "stroke-dasharray": "3 3" }, g);
+  if (etichetta) {
+    const svg = G.lanes.ownerSVGElement, vb = svg.getAttribute("viewBox").split(" ").map(Number);
+    vb[3] += 18; svg.setAttribute("viewBox", vb.join(" ")); scalaOnda(G.indice);
+    testo(g, x, h + 13, etichetta, { class: "dg-ov", "text-anchor": "middle" });
+  }
+  return g;
+}
+function disegnaFF() {
+  const Q = qFF(), n = FF.D.length;
+  disegnaOnda(0, { signal: [
+    { name: "clk", wave: "P" + ".".repeat(n / FF.spp - 1), period: FF.spp },
+    { name: "D", wave: onda(FF.D) },
+    { name: "Q", wave: onda(Q) },
+  ], config: { hscale: 1 } });
+  const G = geomOnda(0, n), xs = FF.fronte * FF.spp * G.sw, dPrima = FF.D[FF.fronte * FF.spp - 1];
+  const g = banda(G, xs, `fronte ${FF.fronte}`);
+  // punto di campionamento su D e freccia verso Q
+  const yD = G.y[1] + (dPrima ? 0 : 20), yQ = G.y[2] + (dPrima ? 0 : 20);
+  el("circle", { cx: xs - 3, cy: yD, r: 4.5, fill: C.arancio }, g);
+  el("path", { d: `M${xs - 3},${yD + (dPrima ? 6 : -6)} C${xs - 16},${(yD + yQ) / 2} ${xs - 12},${(yD + yQ) / 2} ${xs + 6},${yQ + (dPrima ? -2 : 2)}`,
+    fill: "none", stroke: C.arancio, "stroke-width": 2, "marker-end": "url(#dg-fr-ff)" }, g);
+  const m = el("marker", { id: "dg-fr-ff", viewBox: "0 0 10 10", refX: 8, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, el("defs", {}, g));
+  el("path", { d: "M0,0 L10,5 L0,10 z", fill: C.arancio }, m);
+  // traccia D cliccabile: ogni casella si inverte
+  const zona = el("rect", { x: 0, y: G.y[1] - 5, width: n * G.sw, height: 30, fill: "transparent", style: "cursor:pointer" }, G.lanes);
+  zona.addEventListener("click", e => {
+    const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(G.lanes.getScreenCTM().inverse());
+    const k = Math.floor(p.x / G.sw); if (k >= 0 && k < n) { FF.D[k] = 1 - FF.D[k]; aggiornaFF(); }
+  });
+  disegnaSimboloFF(dPrima, Q[FF.fronte * FF.spp]);
+}
+// simbolo del flip-flop D con i valori al fronte scelto
+function disegnaSimboloFF(d, q) {
+  const s = $("ffsimb"); s.innerHTML = "";
+  const filo = (x1, y1, x2, y2, v) => el("line", { x1, y1, x2, y2, stroke: coloreV(v), "stroke-width": v ? 3.5 : 2.5 }, s);
+  filo(150, 55, 250, 55, d); filo(150, 125, 250, 125, 1); filo(370, 55, 470, 55, q); filo(370, 125, 470, 125, 1 - q);
+  el("rect", { x: 250, y: 20, width: 120, height: 140, rx: 4, fill: "#fff", stroke: C.testo, "stroke-width": 2.2 }, s);
+  el("path", { d: "M250,113 L264,125 L250,137", fill: "none", stroke: C.testo, "stroke-width": 2 }, s);  // ingresso di clock
+  testo(s, 260, 61, "D", { class: "dg-nome" }); testo(s, 270, 131, "clk", { class: "dg-pic", style: "font-size:14px" });
+  testo(s, 358, 61, "Q", { class: "dg-nome", "text-anchor": "end" }); testo(s, 358, 131, "~Q", { class: "dg-nome", "text-anchor": "end" });
+  testo(s, 140, 61, `D = ${d}`, { class: "dg-val", "text-anchor": "end", style: `fill:${coloreT(d)}` });
+  testo(s, 140, 131, "↑", { class: "dg-val", "text-anchor": "end", style: `fill:${C.arancio};font-size:22px` });
+  testo(s, 480, 61, `Q = ${q}`, { class: "dg-val", style: `fill:${coloreT(q)}` });
+  testo(s, 480, 131, `~Q = ${1 - q}`, { class: "dg-val", style: `fill:${coloreT(1 - q)}` });
+  testo(s, 310, 178, `al fronte ${FF.fronte}: Q ← D`, { class: "dg-pic", "text-anchor": "middle", style: "font-size:14px" });
+}
+
+// =====================================================================
+// 3. CONTATORE A 3 BIT (WaveDrom)
+// =====================================================================
+const CNT = { n: 9, M: 8, su: true, MAX: 16 };   // n = fronti dati dopo il reset
+const succ = c => (CNT.su ? (c + 1) % CNT.M : (c - 1 + CNT.M) % CNT.M);
+function sequenza() { const c = [0]; for (let k = 0; k < CNT.n; k++) c.push(succ(c[c.length - 1])); return c; }
+function disegnaCont() {
+  let c = sequenza(); const primo = Math.max(0, c.length - CNT.MAX); c = c.slice(primo);   // ultime 16 caselle
+  const bit = b => c.map(v => (v >> b) & 1);
+  disegnaOnda(1, { signal: [
+    { name: "clk", wave: "P" + ".".repeat(c.length - 1) },
+    { name: "Q0", wave: onda(bit(0)) },
+    { name: "Q1", wave: onda(bit(1)) },
+    { name: "Q2", wave: onda(bit(2)) },
+    { name: "N", wave: c.map((v, i) => (i && v === c[i - 1] ? "." : "=")).join(""), data: c.filter((v, i) => !i || v !== c[i - 1]).map(String) },
+  ], config: { hscale: 1 } });
+  if (CNT.n > 0) { const G = geomOnda(1, c.length); banda(G, (c.length - 1) * G.sw, "ultimo fronte"); }
+  // lampadine Q2 Q1 Q0 = N
+  const s = $("lampade"); s.innerHTML = ""; const N = c[c.length - 1];
+  [2, 1, 0].forEach((b, k) => {
+    const on = (N >> b) & 1, x = 170 + k * 90;
+    el("circle", { cx: x, cy: 70, r: 30, fill: on ? UNO : "#fff", stroke: on ? UNO : C.grigio, "stroke-width": 3 }, s);
+    testo(s, x, 81, String(on), { class: "dg-grande", "text-anchor": "middle", style: `fill:${on ? "#fff" : C.testo}` });
+    testo(s, x, 128, `Q_${b}`, { class: "dg-nome", "text-anchor": "middle" });
+  });
+  testo(s, 420, 81, `= ${N}`, { class: "dg-grande" });
+  testo(s, 515, 81, `(${CNT.su ? "+1" : "−1"} mod ${CNT.M})`, { class: "dg-pic", style: "font-size:15px" });
+}
+
+// =====================================================================
+// 4. MACCHINA A STATI (Moore, riconoscitore di 101 con sovrapposizione)
+// =====================================================================
+const FSM = {
+  stati: [
+    { n: "S_0", x: 110, y: 170, u: 0, sig: "niente di utile" },
+    { n: "S_1", x: 310, y: 170, u: 0, sig: "ultimo bit 1" },
+    { n: "S_2", x: 510, y: 170, u: 0, sig: "ultimi bit 10" },
+    { n: "S_3", x: 710, y: 170, u: 1, sig: "ultimi bit 101" },
+  ],
+  // archi: da, a, ingresso x; c = curvatura (spostamento verticale del punto di controllo),
+  // ang = direzione dell'anello (gradi) per le auto-transizioni
+  archi: [
+    { da: 0, a: 1, x: 1, c: -55 }, { da: 1, a: 2, x: 0, c: -55 }, { da: 2, a: 3, x: 1, c: -55 },
+    { da: 3, a: 2, x: 0, c: 55 },  { da: 2, a: 0, x: 0, c: 150 }, { da: 3, a: 1, x: 1, c: -165 },
+    { da: 0, a: 0, x: 0, ang: 180 }, { da: 1, a: 1, x: 1, ang: -100 },
+  ],
+  R: 36,
+};
+const delta = (s, x) => FSM.archi.find(a => a.da === s && a.x === x).a;   // funzione di transizione
+const run = { s: 0, x: 1, storia: [] };   // storia: [{s, x}] dei colpi di clock già dati
+function clockFSM() { run.storia.push({ s: run.s, x: run.x }); run.s = delta(run.s, run.x); }
+function resetFSM() { run.s = 0; run.storia = []; }
+
+function disegnaFSM() {
+  const svg = $("fsm"); svg.innerHTML = "";
+  const R = FSM.R, prossimo = FSM.archi.find(a => a.da === run.s && a.x === run.x);
+  const defs = el("defs", {}, svg);
+  for (const [id, c] of [["dg-fr", C.grigio], ["dg-fr-on", C.arancio]]) {
+    const m = el("marker", { id, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 12, markerHeight: 12, markerUnits: "userSpaceOnUse", orient: "auto" }, defs);
+    el("path", { d: "M0,0 L10,5 L0,10 z", fill: c }, m);
+  }
+  for (const a of FSM.archi) {
+    const on = a === prossimo, A = FSM.stati[a.da], B = FSM.stati[a.a];
+    const st = { fill: "none", stroke: on ? C.arancio : C.grigio, "stroke-width": on ? 3.2 : 1.8, "marker-end": `url(#${on ? "dg-fr-on" : "dg-fr"})` };
+    let lx, ly;
+    if (a.ang !== undefined) {               // anello: cubica che esce e rientra nello stesso cerchio
+      const t = a.ang * Math.PI / 180, d1 = t - 0.45, d2 = t + 0.45, L = 2.6 * R;
+      const p = ang => [A.x + R * Math.cos(ang), A.y + R * Math.sin(ang)];
+      const q = ang => [A.x + L * Math.cos(ang), A.y + L * Math.sin(ang)];
+      const [p1, p2, c1, c2] = [p(d1), p(d2), q(d1 - 0.25), q(d2 + 0.25)];
+      el("path", { d: `M${p1} C${c1} ${c2} ${p2}`, ...st }, svg);
+      [lx, ly] = [A.x + 2.25 * R * Math.cos(t), A.y + 2.25 * R * Math.sin(t)];
+    } else {                                  // arco: quadratica con controllo spostato in verticale
+      const cx = (A.x + B.x) / 2, cy = (A.y + B.y) / 2 + a.c;
+      const bordo = (P, Q) => { const dx = Q[0] - P.x, dy = Q[1] - P.y, l = Math.hypot(dx, dy); return [P.x + R * dx / l, P.y + R * dy / l]; };
+      const p1 = bordo(A, [cx, cy]), p2 = bordo(B, [cx, cy]);
+      el("path", { d: `M${p1} Q${cx},${cy} ${p2}`, ...st }, svg);
+      [lx, ly] = [0.25 * p1[0] + 0.5 * cx + 0.25 * p2[0], 0.25 * p1[1] + 0.5 * cy + 0.25 * p2[1] + (a.c < 0 ? -9 : 20)];
+    }
+    el("rect", { x: lx - 11, y: ly - 15, width: 22, height: 21, rx: 4, fill: "#fff" }, svg);
+    testo(svg, lx, ly + 1, String(a.x), { class: "dg-arco", "text-anchor": "middle", style: `fill:${on ? C.arancio : C.testo}` });
+  }
+  FSM.stati.forEach((S, k) => {
+    const att = k === run.s;
+    el("circle", { cx: S.x, cy: S.y, r: R, fill: att ? "#fdebd8" : "#fff", stroke: att ? C.arancio : C.testo, "stroke-width": att ? 4 : 2 }, svg);
+    if (S.u) el("circle", { cx: S.x, cy: S.y, r: R - 5, fill: "none", stroke: att ? C.arancio : C.testo, "stroke-width": 1.2 }, svg);
+    testo(svg, S.x, S.y - 2, S.n, { class: "dg-nome", "text-anchor": "middle", style: "font-style:normal" });
+    testo(svg, S.x, S.y + 18, `y = ${S.u}`, { class: "dg-pic", "text-anchor": "middle", style: `font-size:13px;${S.u ? `fill:${C.arancio};font-weight:700` : ""}` });
+  });
+  testo(svg, 20, 318, "sugli archi: l'ingresso x · nel cerchio: l'uscita y (Moore) · arancione: prossima transizione",
+    { class: "dg-pic", style: "font-size:13px" });
+  // nastro temporale: ultimi 12 colpi + la casella attuale (ingresso non ancora campionato)
+  const caselle = [...run.storia, { s: run.s, x: run.x }].slice(-12);
+  const nomeS = k => FSM.stati[k].n.replace("_", "");
+  disegnaOnda(2, { signal: [
+    { name: "clk", wave: "P" + ".".repeat(caselle.length - 1) },
+    { name: "x", wave: onda(caselle.map(c => c.x)) },
+    { name: "stato", wave: caselle.map((c, i) => (i && c.s === caselle[i - 1].s ? "." : "=")).join(""),
+      data: caselle.filter((c, i) => !i || c.s !== caselle[i - 1].s).map(c => nomeS(c.s)) },
+    { name: "y", wave: onda(caselle.map(c => FSM.stati[c.s].u)) },
+  ], config: { hscale: 1 } });
+  const G = geomOnda(2, caselle.length);
+  banda(G, (caselle.length - 1) * G.sw + G.sw / 2, "ora");
+}
+
+// =====================================================================
+// PANNELLO
+// =====================================================================
+const P = $("pannello");
+const box = () => { const d = document.createElement("div"); d.className = "dg-box"; P.appendChild(d); return d; };
+Doll.titoletto(P, "Vista");
+const sModo = Doll.scelta(P, { opzioni: [["comb", "Logica combinatoria"], ["ff", "Flip-flop D"], ["cont", "Contatore 3 bit"], ["fsm", "Macchina a stati"]],
+  value: "comb", onChange: m => mostra(m) });
+const pann = { comb: box(), ff: box(), cont: box(), fsm: box() };
+
+// --- combinatoria
+Doll.titoletto(pann.comb, "Circuito");
+const sCirc = Doll.scelta(pann.comb, { opzioni: [["sommatore", "Sommatore completo"], ["mux", "Multiplexer 2:1"]], value: "sommatore",
+  onChange: k => { circ = CIRCUITI[k]; ingr = {}; circ.ingressi.forEach(i => (ingr[i.n] = 0)); aggiornaComb(); } });
+Doll.titoletto(pann.comb, "Letture");
+const lUsc = Doll.lettura(pann.comb, "uscite");
+const lVer = Doll.lettura(pann.comb, "verifica");
+const nComb = document.createElement("p"); nComb.className = "doll-nota"; pann.comb.appendChild(nComb);
+nComb.textContent = "Combinatoria: niente memoria. Stessi ingressi, stesse uscite, sempre.";
+function aggiornaComb() {
+  if (modo !== "comb") return;
+  $("comb-nome").textContent = circ.nome; setDati(circ.dati);
+  disegnaComb(); disegnaTabella();
+  const v = valuta(ingr);
+  lUsc(circ.uscite.map(u => `$${u.n.replace("_", "_{")}${u.n.includes("_") ? "}" : ""}=${v[u.n]}$`).join(", "));
+  lVer(circ.verifica(v));
+}
+
+// --- flip-flop
+Doll.titoletto(pann.ff, "Fronte di salita");
+const sFronte = Doll.slider(pann.ff, { label: "fronte $n$", min: 1, max: FF.D.length / FF.spp - 1, step: 1, value: FF.fronte,
+  onInput: v => { FF.fronte = v; aggiornaFF(); } });
+Doll.bottone(pann.ff, "D casuale", () => { FF.D = FF.D.map(() => (Math.random() < 0.5 ? 1 : 0)); aggiornaFF(); });
+Doll.titoletto(pann.ff, "Letture");
+const lD = Doll.lettura(pann.ff, "D appena prima del fronte");
+const lQ = Doll.lettura(pann.ff, "Q dopo il fronte");
+const lG = Doll.lettura(pann.ff, "valori campionati");
+const nFF = document.createElement("p"); nFF.className = "doll-nota"; pann.ff.appendChild(nFF);
+nFF.textContent = "Tra due fronti D può cambiare quanto vuole: Q non se ne accorge. All'inizio Q è indefinito (x).";
+function aggiornaFF() {
+  if (modo !== "ff") return;
+  setDati("$Q \\leftarrow D$ sul fronte di salita di clk");
+  disegnaFF();
+  const Q = qFF(), k = FF.fronte * FF.spp;
+  lD(`$D=${FF.D[k - 1]}$`); lQ(`$Q=${Q[k]}$`);
+  // la sequenza che Q "vede": un valore di D per fronte
+  const camp = []; for (let s = FF.spp; s < FF.D.length; s += FF.spp) camp.push(FF.D[s - 1]);
+  lG(camp.join(" "));
+}
+
+// --- contatore
+Doll.titoletto(pann.cont, "Clock");
+Doll.bottone(pann.cont, "Clock ↑", () => { CNT.n++; aggiornaCont(); }, true);
+Doll.bottone(pann.cont, "Reset", () => { CNT.n = 0; aggiornaCont(); });
+const sDir = Doll.scelta(pann.cont, { label: "verso", opzioni: [["su", "avanti (+1)"], ["giu", "indietro (−1)"]], value: "su",
+  onChange: v => { CNT.su = v === "su"; aggiornaCont(); } });
+const sMod = Doll.slider(pann.cont, { label: "modulo $M$", min: 2, max: 8, step: 1, value: 8, onInput: v => { CNT.M = v; aggiornaCont(); } });
+Doll.titoletto(pann.cont, "Letture");
+const lN = Doll.lettura(pann.cont, "stato $Q_2Q_1Q_0$");
+const lSucc = Doll.lettura(pann.cont, "prossimo stato");
+const nCont = document.createElement("p"); nCont.className = "doll-nota"; pann.cont.appendChild(nCont);
+function aggiornaCont() {
+  if (modo !== "cont") return;
+  setDati("$N \\leftarrow (N \\pm 1) \\bmod M$ a ogni fronte di salita");
+  disegnaCont();
+  const c = sequenza(), N = c[c.length - 1], b = v => v.toString(2).padStart(3, "0");
+  lN(`${b(N)} = ${N}`); lSucc(`${b(succ(N))} = ${succ(N)}`);
+  $("cont-nota").textContent = `${CNT.n} fronti dopo il reset`;
+  nCont.textContent = CNT.M < 8
+    ? `Modulo ${CNT.M}: ${CNT.su ? `dopo ${CNT.M - 1} torna a 0` : `da 0 salta a ${CNT.M - 1}`}; gli stati da ${CNT.M} a 7 non si usano.`
+    : CNT.su ? "Q0 cambia a ogni fronte, Q1 quando Q0 = 1, Q2 quando Q1 = Q0 = 1: ogni bit dimezza la frequenza."
+             : "All'indietro: Q0 cambia a ogni fronte, Q1 quando Q0 = 0, Q2 quando Q1 = Q0 = 0.";
+}
+
+// --- macchina a stati
+Doll.titoletto(pann.fsm, "Ingresso e clock");
+const bX = Doll.bottone(pann.fsm, "", () => { run.x = 1 - run.x; aggiornaFSM(); });
+Doll.bottone(pann.fsm, "Clock ↑", () => { clockFSM(); aggiornaFSM(); }, true);
+Doll.bottone(pann.fsm, "Reset", () => { resetFSM(); aggiornaFSM(); });
+Doll.titoletto(pann.fsm, "Letture");
+const lS = Doll.lettura(pann.fsm, "stato attuale");
+const lSig = Doll.lettura(pann.fsm, "significato");
+const lY = Doll.lettura(pann.fsm, "uscita $y$");
+const lProx = Doll.lettura(pann.fsm, "al prossimo fronte");
+const lSeq = Doll.lettura(pann.fsm, "bit letti");
+function aggiornaFSM() {
+  if (modo !== "fsm") return;
+  setDati("$y=1$ quando gli ultimi tre bit di $x$ sono $1\\,0\\,1$");
+  bX.textContent = `ingresso x = ${run.x}`;
+  disegnaFSM();
+  const S = FSM.stati[run.s], tx = n => `$${n.replace("_", "_{")}}$`;
+  lS(tx(S.n)); lSig(S.sig); lY(`$${S.u}$`);
+  lProx(`${tx(S.n)} → ${tx(FSM.stati[delta(run.s, run.x)].n)}`);
+  lSeq(run.storia.length ? run.storia.map(c => c.x).join(" ") : "—");
+}
+
+// =====================================================================
+// CAMBIO VISTA, RESIZE, GUIDA
+// =====================================================================
+let modo = "comb";
+const aggiorna = { comb: aggiornaComb, ff: aggiornaFF, cont: aggiornaCont, fsm: aggiornaFSM };
+function mostra(m) {
+  modo = m;
+  for (const k in aggiorna) { $("v-" + k).classList.toggle("attivo", k === m); pann[k].hidden = k !== m; }
+  aggiorna[m]();   // disegna solo quando la vista è visibile (getBBox e larghezze valgono 0 se nascosta)
+}
+let tRes = null;
+window.addEventListener("resize", () => { clearTimeout(tRes); tRes = setTimeout(() => aggiorna[modo](), 120); });
+
+const fsmDopo = (bits, x) => { resetFSM(); for (const b of bits) { run.x = b; clockFSM(); } run.x = x; };
+// "Prova tu" sul contatore: modulo 6 all'indietro dal reset la sequenza e' 0, 5, 4, 3, 2, 1, 0, 5, 4, ...
+// (enumerata: N = (−n) mod 6), quindi N = 4 dopo 2 fronti (o 8, 14). Verifica: M = 6, verso indietro, N = 4.
+const prova = Doll.bersaglio(pann.cont, { testo: "Con $M=6$ e verso indietro, porta lo stato a $N=4$",
+  verifica: () => { const c = sequenza(); return modo === "cont" && CNT.M === 6 && !CNT.su && c[c.length - 1] === 4; },
+  ok: "$0\\to5\\to4$: all'indietro da 0 si salta a $M-1=5$" });
+pann.cont.prepend(prova.el);   // in cima al pannello del contatore
+// ogni passo: stato completo, e il bersaglio solo nell'ultimo
+const passo = (f, provaTu = false) => () => { f(); prova.mostra(provaTu); };
+// prevedi -> osserva -> spiega: il passo 4 chiede se 0, 1 dopo "101" riaccendono y; il 5 lo mostra
+Doll.guida([
+  { testo: "Combinatoria: le uscite dipendono solo dagli ingressi di adesso",
+    applica: passo(() => { sModo.set("comb"); sCirc.set("sommatore"); ingr = { A: 1, B: 1, C_in: 0 }; aggiornaComb(); }) },
+  { testo: "Il flip-flop D copia D solo sul fronte di salita",
+    applica: passo(() => { FF.D = D_INIZ.slice(); sModo.set("ff"); sFronte.set(3); }) },
+  { testo: "Contatore: Q0 cambia a ogni fronte, Q1 ogni due, Q2 ogni quattro",
+    applica: passo(() => { CNT.n = 9; sModo.set("cont"); sDir.set("su"); sMod.set(8); }) },
+  { testo: "Letto 1, 0, 1: $y=1$. Poi 0 e 1: di nuovo $y=1$? Prevedi",
+    applica: passo(() => { fsmDopo([1, 1, 0, 1], 0); sModo.set("fsm"); }) },
+  { testo: "Sì: l'ultimo 1 fa da inizio del nuovo 101",
+    applica: passo(() => { fsmDopo([1, 1, 0, 1, 0, 1], 0); sModo.set("fsm"); }) },
+  { testo: "Prova tu: con $M=6$, conta all'indietro fino a $N=4$",
+    applica: passo(() => { CNT.n = 0; sModo.set("cont"); sDir.set("su"); sMod.set(8); }, true) },
+]);
+// stati extra per il controllo automatico
+Doll.stati([
+  { nome: "multiplexer S=1", applica: () => { sModo.set("comb"); sCirc.set("mux"); ingr = { A: 0, S: 1, B: 1 }; aggiornaComb(); } },
+  { nome: "contatore mod 6 indietro", applica: () => { CNT.n = 14; sModo.set("cont"); sDir.set("giu"); sMod.set(6); } },
+  { nome: "FSM sovrapposizione 10101", applica: () => { fsmDopo([1, 0, 1, 0, 1], 1); sModo.set("fsm"); } },
+]);
+Doll.pronto();
+</script>
+</body>
+</html>

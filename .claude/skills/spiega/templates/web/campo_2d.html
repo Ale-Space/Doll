@@ -1,0 +1,384 @@
+<!doctype html>
+<!--
+TEMPLATE WEB: campo elettrostatico 2D su canvas (Fisica II, Elettrotecnica, Elettromagnetismo).
+Esempio: 1-4 cariche puntiformi TRASCINABILI con carica regolabile (slider in nC, aggiungi/rimuovi);
+linee di campo integrate con RK4 a passo adattivo (partono dalle cariche +, finiscono sulle - o
+escono dalla vista), equipotenziali con marching squares su una griglia modesta, sonda trascinabile
+che mostra il vettore E e i valori di |E| e V (con l'equipotenziale che passa per la sonda).
+Unita' SI: posizioni in m (il lato corto della vista e' LATO = 0,8 m), cariche in nC, E in V/m, V in V.
+
+Come e' fatto (per adattarlo):
+  campo(x, y)       -> [Ex, Ey, V] nel punto: e' L'UNICA funzione da cambiare per un'altra sorgente
+  linea(x, y, verso) integra dr/ds = verso * E/|E| (RK4, passo piu' piccolo vicino alle cariche)
+  isolinee(griglia, livello) marching squares -> segmenti; griglia di V calcolata ogni ridisegno
+  disegna() ridisegna tutto; si chiama con richiedi() (accorpa i ridisegni in un requestAnimationFrame)
+
+Idee per esercizi simili:
+- Teorema di Gauss: disegna una circonferenza (superficie gaussiana) trascinabile e conta le linee
+  che la attraversano (uscenti - entranti) ~ q_interna; lettura del flusso calcolato numericamente
+  integrando E·n lungo la curva.
+- Condensatore piano: due piastre come file di 30-50 cariche puntiformi ravvicinate (+ e -) oppure
+  campo analitico di un segmento carico (lambda); si vede il campo uniforme dentro e il bordo.
+- Campo magnetico di fili rettilinei (perpendicolari al foglio): stessa macchina con
+  B = mu0 I / (2 pi r) * (versore azimutale); le linee di B sono chiuse (fermare l'integrazione
+  quando la linea torna vicino al punto di partenza); le "equipotenziali" diventano il potenziale
+  vettore A_z = -mu0 I/(2 pi) ln r, le cui isolinee SONO le linee di B.
+- Metodo delle immagini: carica davanti a un piano conduttore (immagine -q simmetrica, mostrare solo
+  il semipiano reale) o a una sfera (q' = -q R/d in R^2/d); verificare V = 0 sul conduttore.
+- Dipolo in campo esterno uniforme: aggiungere E0 costante in campo(); momento torcente sulla sonda.
+- Lavoro della forza elettrica: spostare la sonda e mostrare q (V_A - V_B).
+
+Regole: titolo breve, dati in .doll-dati, didascalie <= ~12 parole, Doll.guida per il percorso
+guidato (ogni passo = uno stato fotografato dal controllo), Doll.pronto() alla fine.
+Build:  .venv/bin/python .claude/skills/spiega/scripts/web_build.py pagina.html
+Check:  .venv/bin/python .claude/skills/spiega/scripts/web_check.py interattivo.html
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campo di cariche puntiformi</title>
+<!-- doll:lib katex -->
+<style>
+  #vista canvas { touch-action: none; }          /* il trascinamento non deve scorrere la pagina */
+  .doll-legenda i.tratto { background: none; border-top: 2px dashed #6b6b70; height: 0; width: 18px; }
+  /* mobile: con un pannello lungo doll.css lascerebbe la didascalia sopra il pannello; qui la pagina cresce */
+  @media (max-width: 820px) { html, body { height: auto; } .doll-main { flex: none; } }
+</style>
+</head>
+<body>
+<header class="doll-top">
+  <h1>Campo di cariche puntiformi</h1>
+  <div class="doll-dati">$\vec E=\sum_i \dfrac{k\,q_i}{r_i^2}\,\hat r_i \qquad V=\sum_i \dfrac{k\,q_i}{r_i} \qquad k=8{,}99\cdot10^9\ \mathrm{N\,m^2/C^2}$</div>
+</header>
+<main class="doll-main">
+  <section class="doll-vista" id="vista">
+    <div class="doll-legenda">
+      <i style="background:#3a3a3e"></i>linee di $\vec E$ &nbsp;
+      <i style="background:#c53030"></i>$V>0$ &nbsp; <i style="background:#2b6cb0"></i>$V<0$ &nbsp;
+      <i class="tratto"></i>$V=0$
+    </div>
+  </section>
+  <aside class="doll-pannello" id="pannello"></aside>
+</main>
+<footer class="doll-didascalia" id="didascalia"></footer>
+
+<script>
+const C = Doll.col;
+const K = 8.9875e9;          // costante di Coulomb [N m^2/C^2]
+const NC = 1e-9;             // le cariche sono espresse in nC
+const LATO = 0.8;            // il lato corto della vista corrisponde a 0,8 m
+const R_Q = 13;              // raggio del disco che rappresenta la carica [px]
+const LINEE_PER_NC = 8;      // numero di linee per nC: densita' delle linee ~ |E|
+const CELLA = 7;             // lato della cella della griglia per le equipotenziali [px]
+const MAX_CARICHE = 4, MIN_CARICHE = 1;
+
+const cv = Doll.canvas(), ctx = cv.ctx;
+const scala = () => Math.min(cv.w, cv.h) / LATO;                       // px per metro
+const aPx = (x, y) => [cv.w / 2 + x * scala(), cv.h / 2 - y * scala()];  // m -> px (y verso l'alto)
+const aM = (px, py) => [(px - cv.w / 2) / scala(), (cv.h / 2 - py) / scala()];
+
+// ---------- stato ----------
+let cariche = [{ x: 0, y: 0, q: 2 }];        // posizioni in m, q in nC
+const sonda = { x: 0.18, y: 0.12 };
+let mostra = "tutto", mostraSonda = true, dV = 30;   // dV: passo tra equipotenziali [V]
+
+// ---------- fisica: e' l'unica parte da cambiare per altre sorgenti ----------
+function campo(x, y) {
+  let Ex = 0, Ey = 0, V = 0;
+  for (const c of cariche) {
+    if (!c.q) continue;
+    const dx = x - c.x, dy = y - c.y, r2 = dx * dx + dy * dy;
+    if (r2 < 1e-12) continue;                 // sopra la carica: singolare, la saltiamo
+    const r = Math.sqrt(r2), kq = K * c.q * NC;
+    Ex += kq * dx / (r2 * r); Ey += kq * dy / (r2 * r); V += kq / r;
+  }
+  return [Ex, Ey, V];
+}
+
+// Linea di campo: integra dr/ds = verso * E/|E| con RK4 e passo adattivo (in metri).
+// Si ferma su una carica, fuori dalla vista (con margine), o in un punto di sella (E ~ 0).
+function linea(x0, y0, verso) {
+  const s = scala(), pts = [[x0, y0]];
+  // si integra anche ben fuori dalla vista (4x): cosi' molte linee "uscite" rientrano sulla carica -
+  const xLim = 4 * cv.w / 2 / s, yLim = 4 * cv.h / 2 / s;
+  const dir = (x, y) => { const [Ex, Ey] = campo(x, y), m = Math.hypot(Ex, Ey) || 1e-30; return [verso * Ex / m, verso * Ey / m]; };
+  let x = x0, y = y0, prec = dir(x, y);
+  for (let i = 0; i < 2500; i++) {
+    let dmin = Infinity;
+    for (const c of cariche) if (c.q) dmin = Math.min(dmin, Math.hypot(x - c.x, y - c.y));
+    // passo: 0,8 px vicino alle cariche, ~5 px nella vista, piu' lungo lontano (campo regolare)
+    const h = Math.max(0.8 / s, Math.min(0.2 * dmin, 5 / s + 0.04 * dmin));
+    const k1 = dir(x, y), k2 = dir(x + h / 2 * k1[0], y + h / 2 * k1[1]);
+    const k3 = dir(x + h / 2 * k2[0], y + h / 2 * k2[1]), k4 = dir(x + h * k3[0], y + h * k3[1]);
+    const vx = (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]) / 6, vy = (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]) / 6;
+    if (vx * prec[0] + vy * prec[1] < 0) return { pts, fine: "sella" };  // la direzione si inverte: E = 0
+    prec = [vx, vy]; x += h * vx; y += h * vy; pts.push([x, y]);
+    for (const c of cariche)
+      if (c.q && Math.hypot(x - c.x, y - c.y) < 0.6 * R_Q / s) { pts.push([c.x, c.y]); return { pts, fine: c }; }
+    if (Math.abs(x) > xLim || Math.abs(y) > yLim) return { pts, fine: "fuori" };
+  }
+  return { pts, fine: "max" };
+}
+
+// Tutte le linee, orientate lungo E. Dalle cariche + in avanti; dalle cariche - all'indietro,
+// tenendo solo quelle che NON finiscono su una carica + (sono gia' state disegnate).
+function tutteLeLinee() {
+  const out = [], s = scala();
+  for (const c of cariche) {
+    if (!c.q) continue;
+    const n = Math.max(4, Math.round(LINEE_PER_NC * Math.abs(c.q)));
+    for (let k = 0; k < n; k++) {
+      const a = 2 * Math.PI * k / n, r0 = R_Q / s;
+      const L = linea(c.x + r0 * Math.cos(a), c.y + r0 * Math.sin(a), c.q > 0 ? 1 : -1);
+      if (c.q > 0) out.push(L.pts);
+      else if (!(L.fine && L.fine.q > 0)) out.push(L.pts.reverse());
+    }
+  }
+  return out;
+}
+
+// Marching squares: segmenti dell'isolinea v = liv su una griglia (nan = cella da saltare).
+function isolinee(G, liv) {
+  const seg = [], { nx, ny, v } = G;
+  const t = (a, b) => (liv - a) / (b - a);
+  for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+    const a = v[j * nx + i], b = v[j * nx + i + 1], c = v[(j + 1) * nx + i + 1], d = v[(j + 1) * nx + i];
+    if (a !== a || b !== b || c !== c || d !== d) continue;          // NaN vicino a una carica
+    const idx = (a > liv) | (b > liv) << 1 | (c > liv) << 2 | (d > liv) << 3;
+    if (idx === 0 || idx === 15) continue;
+    const x = i * CELLA, y = j * CELLA;
+    // punti sui 4 lati: alto (a-b), destra (b-c), basso (d-c), sinistra (a-d)
+    const P = { A: [x + CELLA * t(a, b), y], B: [x + CELLA, y + CELLA * t(b, c)],
+                Cc: [x + CELLA * t(d, c), y + CELLA], D: [x, y + CELLA * t(a, d)] };
+    const centro = (a + b + c + d) / 4 > liv;
+    const tab = { 1: ["A", "D"], 2: ["A", "B"], 3: ["B", "D"], 4: ["B", "Cc"], 6: ["A", "Cc"], 7: ["Cc", "D"],
+                  8: ["Cc", "D"], 9: ["A", "Cc"], 11: ["B", "Cc"], 12: ["B", "D"], 13: ["A", "B"], 14: ["A", "D"] };
+    if (idx === 5) { if (centro) seg.push([P.A, P.B], [P.Cc, P.D]); else seg.push([P.A, P.D], [P.B, P.Cc]); }
+    else if (idx === 10) { if (centro) seg.push([P.A, P.D], [P.B, P.Cc]); else seg.push([P.A, P.B], [P.Cc, P.D]); }
+    else { const [p, q] = tab[idx]; seg.push([P[p], P[q]]); }
+  }
+  return seg;
+}
+
+function grigliaV() {
+  const nx = Math.ceil(cv.w / CELLA) + 1, ny = Math.ceil(cv.h / CELLA) + 1, v = new Float64Array(nx * ny);
+  const qPx = cariche.filter(c => c.q).map(c => aPx(c.x, c.y));
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const px = i * CELLA, py = j * CELLA;
+    let vicino = false;
+    for (const [cx, cy] of qPx) if ((px - cx) ** 2 + (py - cy) ** 2 < (R_Q + CELLA) ** 2) { vicino = true; break; }
+    v[j * nx + i] = vicino ? NaN : campo(...aM(px, py))[2];
+  }
+  return { nx, ny, v };
+}
+
+// ---------- disegno ----------
+function freccia(x, y, ux, uy, l, colore) {          // punta di freccia in (x,y) lungo (ux,uy) [px]
+  ctx.fillStyle = colore; ctx.beginPath();
+  ctx.moveTo(x + ux * l, y + uy * l);
+  ctx.lineTo(x - ux * l * 0.6 - uy * l * 0.55, y - uy * l * 0.6 + ux * l * 0.55);
+  ctx.lineTo(x - ux * l * 0.6 + uy * l * 0.55, y - uy * l * 0.6 - ux * l * 0.55);
+  ctx.closePath(); ctx.fill();
+}
+function tracciaSegmenti(seg) { ctx.beginPath(); for (const [p, q] of seg) { ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); } ctx.stroke(); }
+const virgola = t => t.replace(/\./g, ",");                                    // decimali all'italiana
+const fmtE = E => virgola(E >= 1e3 ? (E / 1e3).toFixed(E >= 1e4 ? 1 : 2) + " kV/m" : E.toFixed(E >= 100 ? 0 : 1) + " V/m");
+const fmtV = V => virgola(Math.abs(V) >= 1e3 ? (V / 1e3).toFixed(2) + " kV" : V.toFixed(Math.abs(V) >= 100 ? 0 : 1) + " V");
+
+function disegna() {
+  const w = cv.w, h = cv.h;
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+
+  // equipotenziali: livelli +-m*dV (m = 1..8) e V = 0
+  if (mostra !== "linee") {
+    const G = grigliaV();
+    ctx.lineWidth = 1.2;
+    for (let m = -8; m <= 8; m++) {
+      if (m === 0) { ctx.strokeStyle = "rgba(107,107,112,.8)"; ctx.setLineDash([5, 4]); }
+      else { ctx.strokeStyle = m > 0 ? "rgba(197,48,48,.55)" : "rgba(43,108,176,.6)"; ctx.setLineDash([]); }
+      tracciaSegmenti(isolinee(G, m * dV));
+    }
+    ctx.setLineDash([]);
+    if (mostraSonda) {                                   // equipotenziale che passa per la sonda
+      ctx.strokeStyle = C.verde; ctx.lineWidth = 2; ctx.setLineDash([7, 4]);
+      tracciaSegmenti(isolinee(G, campo(sonda.x, sonda.y)[2])); ctx.setLineDash([]);
+    }
+  }
+
+  // linee di campo con frecce lungo il verso di E
+  if (mostra !== "equi") {
+    ctx.strokeStyle = "#3a3a3e"; ctx.lineWidth = 1.3;
+    for (const pts of tutteLeLinee()) {
+      const P = pts.map(p => aPx(p[0], p[1]));
+      ctx.beginPath(); P.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]))); ctx.stroke();
+      // lunghezza visibile e posizioni delle frecce (una a meta' se corta, altrimenti ogni 170 px)
+      const dentro = p => p[0] > 4 && p[0] < w - 4 && p[1] > 4 && p[1] < h - 4;
+      let Ltot = 0; for (let i = 1; i < P.length; i++) if (dentro(P[i])) Ltot += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
+      const posti = Ltot < 220 ? [Ltot / 2] : Array.from({ length: Math.floor((Ltot - 60) / 170) + 1 }, (_, k) => 80 + 170 * k);
+      let acc = 0, k = 0;
+      for (let i = 1; i < P.length && k < posti.length; i++) {
+        if (!dentro(P[i])) continue;
+        const dx = P[i][0] - P[i - 1][0], dy = P[i][1] - P[i - 1][1], d = Math.hypot(dx, dy);
+        acc += d;
+        if (acc >= posti[k] && d > 0) { freccia(P[i][0], P[i][1], dx / d, dy / d, 6, "#3a3a3e"); k++; }
+      }
+    }
+  }
+
+  // cariche
+  cariche.forEach((c, i) => {
+    const [x, y] = aPx(c.x, c.y), col = c.q > 0 ? C.rosso : c.q < 0 ? C.blu : C.grigio;
+    ctx.fillStyle = col; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, R_Q, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.font = "bold 17px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(c.q > 0 ? "+" : c.q < 0 ? "−" : "0", x, y + 1);
+    // etichetta "q_i = ... nC" (pedice disegnato a mano) su sfondo bianco, leggibile sopra le linee
+    const t = ` = ${c.q > 0 ? "+" : ""}${virgola(c.q.toFixed(1))} nC`;
+    ctx.font = "italic 14px serif"; const wq = ctx.measureText("q").width;
+    ctx.font = "10px sans-serif"; const wi = ctx.measureText(i + 1).width;
+    ctx.font = "13px sans-serif"; const wt = ctx.measureText(t).width;
+    const ex = x + R_Q + 4, ey = y - R_Q - 8;
+    ctx.fillStyle = "rgba(255,255,255,.88)"; ctx.fillRect(ex - 3, ey - 10, wq + wi + wt + 7, 21);
+    ctx.fillStyle = col; ctx.textAlign = "left";
+    ctx.font = "italic 14px serif"; ctx.fillText("q", ex, ey);
+    ctx.font = "10px sans-serif"; ctx.fillText(i + 1, ex + wq, ey + 5);
+    ctx.font = "13px sans-serif"; ctx.fillText(t, ex + wq + wi, ey);
+  });
+
+  // sonda: vettore E (lunghezza in scala logaritmica) e letture
+  const [Ex, Ey, V] = campo(sonda.x, sonda.y), E = Math.hypot(Ex, Ey);
+  if (mostraSonda) {
+    const [x, y] = aPx(sonda.x, sonda.y);
+    if (E > 1e-6) {
+      const l = Math.max(14, Math.min(95, 22 * Math.log10(E / 3)));
+      const ux = Ex / E, uy = -Ey / E;                 // y dello schermo verso il basso
+      ctx.strokeStyle = C.verde; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + ux * (l - 6), y + uy * (l - 6)); ctx.stroke();
+      freccia(x + ux * (l - 6), y + uy * (l - 6), ux, uy, 9, C.verde);
+    }
+    ctx.fillStyle = "#fff"; ctx.strokeStyle = C.verde; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(x, y, 7, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = C.verde; ctx.font = "bold 14px sans-serif"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    ctx.fillText("P", x - 11, y - 11);
+  }
+  lE(fmtE(E)); lV(fmtV(V));
+  lComp(fmtComp(Ex, Ey));
+
+  // barra di scala: 10 cm
+  const l10 = 0.1 * scala();
+  ctx.strokeStyle = C.testo; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(16, h - 18); ctx.lineTo(16 + l10, h - 18);
+  ctx.moveTo(16, h - 23); ctx.lineTo(16, h - 13); ctx.moveTo(16 + l10, h - 23); ctx.lineTo(16 + l10, h - 13); ctx.stroke();
+  ctx.fillStyle = C.testo; ctx.font = "13px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  ctx.fillText("10 cm", 16 + l10 / 2, h - 24);
+}
+// componenti con segno e unita' comune (kV/m se una delle due supera 1000 V/m)
+function fmtComp(Ex, Ey) {
+  const M = Math.max(Math.abs(Ex), Math.abs(Ey)), kilo = M >= 1e3, f = v => (kilo ? v / 1e3 : v).toFixed(kilo ? 2 : 1);
+  return `(${f(Ex)}; ${f(Ey)}) ${kilo ? "kV/m" : "V/m"}`.replace(/\./g, ",");
+}
+let inCoda = false;
+function richiedi() { if (inCoda) return; inCoda = true; requestAnimationFrame(() => { inCoda = false; disegna(); }); }
+window.addEventListener("resize", richiedi);
+// la vista cambia misura anche senza resize della finestra (es. KaTeX in alto): Doll.canvas la svuota, si ridisegna
+new ResizeObserver(richiedi).observe(document.getElementById("vista"));
+
+// ---------- trascinamento (mouse e touch) ----------
+let preso = null;
+function bersaglio(px, py) {
+  if (mostraSonda) { const [x, y] = aPx(sonda.x, sonda.y); if (Math.hypot(px - x, py - y) < 14) return sonda; }
+  let best = null, dBest = R_Q + 8;
+  for (const c of cariche) { const [x, y] = aPx(c.x, c.y), d = Math.hypot(px - x, py - y); if (d < dBest) { dBest = d; best = c; } }
+  return best;
+}
+const posEvento = e => { const r = cv.c.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+cv.c.addEventListener("pointerdown", e => { preso = bersaglio(...posEvento(e)); if (preso) { cv.c.setPointerCapture(e.pointerId); cv.c.style.cursor = "grabbing"; } });
+cv.c.addEventListener("pointermove", e => {
+  const [px, py] = posEvento(e);
+  if (!preso) { cv.c.style.cursor = bersaglio(px, py) ? "grab" : "default"; return; }
+  const [x, y] = aM(Math.max(10, Math.min(cv.w - 10, px)), Math.max(10, Math.min(cv.h - 10, py)));
+  preso.x = x; preso.y = y; richiedi();
+});
+cv.c.addEventListener("pointerup", () => { preso = null; cv.c.style.cursor = "default"; });
+
+// ---------- pannello ----------
+Doll.titoletto(null, "Cariche");
+const listaEl = document.createElement("div");
+listaEl.style.cssText = "display:flex;flex-direction:column;gap:12px";
+document.getElementById("pannello").appendChild(listaEl);
+function costruisciSlider() {
+  listaEl.innerHTML = "";
+  cariche.forEach((c, i) => Doll.slider(listaEl, { label: `$q_${i + 1}$ [nC]`, min: -5, max: 5, step: 0.5, value: c.q,
+    fmt: v => (v > 0 ? "+" : "") + v.toFixed(1).replace(".", ","), onInput: v => { c.q = v; richiedi(); } }));
+  bAgg.disabled = cariche.length >= MAX_CARICHE; bRim.disabled = cariche.length <= MIN_CARICHE;
+}
+// nuova carica: il primo di questi posti lontano dalle altre
+const POSTI = [[0, 0.22], [0, -0.22], [-0.25, 0.15], [0.25, -0.15], [0.3, 0.2], [-0.3, -0.2]];
+const bAgg = Doll.bottone(null, "+ Aggiungi", () => {
+  if (cariche.length >= MAX_CARICHE) return;
+  const p = POSTI.find(([x, y]) => cariche.every(c => Math.hypot(c.x - x, c.y - y) > 0.08)) || [0, 0];
+  cariche.push({ x: p[0], y: p[1], q: -1 }); costruisciSlider(); richiedi();
+});
+const bRim = Doll.bottone(null, "− Rimuovi", () => { if (cariche.length > MIN_CARICHE) { cariche.pop(); costruisciSlider(); richiedi(); } });
+
+Doll.titoletto(null, "Disegno");
+const sMostra = Doll.scelta(null, { label: "Mostra", value: "tutto",
+  opzioni: [["tutto", "linee ed equipotenziali"], ["linee", "solo linee di campo"], ["equi", "solo equipotenziali"]],
+  onChange: v => { mostra = v; richiedi(); } });
+const sDV = Doll.slider(null, { label: "passo $\\Delta V$ tra equipotenziali", min: 10, max: 100, step: 5, value: dV,
+  fmt: v => v + " V", onInput: v => { dV = v; richiedi(); } });
+
+Doll.titoletto(null, "Sonda P");
+const lE = Doll.lettura(null, "$|\\vec E|$");
+const lComp = Doll.lettura(null, "$(E_x;\\ E_y)$");
+const lV = Doll.lettura(null, "$V$");
+const bSonda = Doll.bottone(null, "Nascondi P", () => mostraP(!mostraSonda));
+function mostraP(si) { mostraSonda = si; bSonda.textContent = si ? "Nascondi P" : "Mostra P"; richiedi(); }
+const nota = document.createElement("p"); nota.className = "doll-nota";
+nota.textContent = "Trascina le cariche e il punto verde P. La freccia verde ha lunghezza in scala logaritmica; la curva verde tratteggiata è l'equipotenziale per P.";
+document.getElementById("pannello").appendChild(nota);
+costruisciSlider();
+
+// ---------- percorso guidato ----------
+// "Prova tu": q1 = 4 nC in x = -0,15 m, q2 = 1 nC in x = +0,15 m. E = 0 dove k q1/r1^2 = k q2/r2^2 tra le cariche:
+// r1/r2 = sqrt(q1/q2) = 2  ->  P = (0,05; 0) m, piu' vicino alla carica piccola (SymPy; l'altra radice, x = 0,45 m,
+// vale solo per cariche di segno opposto). Verifica fisica, valida per qualunque disposizione delle cariche:
+// in P i campi si annullano, |E| < 0,2 (|E1| + |E2|); qui vuol dire P entro ~1,3 cm da (0,05; 0) lungo x, ~2,7 cm lungo y.
+function campiAnnullati() {
+  if (!mostraSonda) return false;
+  const [Ex, Ey] = campo(sonda.x, sonda.y); let S = 0;
+  for (const c of cariche) {
+    const r2 = (sonda.x - c.x) ** 2 + (sonda.y - c.y) ** 2;
+    if (c.q && r2 > 1e-12) S += K * Math.abs(c.q) * NC / r2;      // stesse cariche che campo() somma
+  }
+  return S > 0 && Math.hypot(Ex, Ey) < 0.2 * S;
+}
+const compito = Doll.bersaglio(null, { testo: "trascina P dove $\\vec E=0$", ok: "$\\vec E=0$ vicino alla carica minore: $r_1/r_2=\\sqrt{q_1/q_2}$",
+  verifica: campiAnnullati });
+document.getElementById("pannello").prepend(compito.el);       // in cima al pannello, ben visibile
+// ogni passo imposta tutto: cariche, sonda (e se si vede), cosa si disegna, il "Prova tu"
+function imposta(lista, px, py, o = {}) {
+  cariche = lista.map(([x, y, q]) => ({ x, y, q })); sonda.x = px; sonda.y = py; mostraP(o.sonda ?? true);
+  sMostra.set(o.mostra || "tutto"); compito.mostra(!!o.prova);
+  costruisciSlider(); richiedi();
+}
+const DIPOLO = [[-0.15, 0, 2], [0.15, 0, -2]];
+Doll.guida([
+  { testo: "Una carica: linee radiali, equipotenziali circolari",
+    applica: () => imposta([[0, 0, 2]], 0.18, 0.12) },
+  { testo: "Dipolo: le linee escono dalla $+$ ed entrano nella $-$",
+    applica: () => imposta(DIPOLO, 0, -0.25) },
+  // prevedi: solo equipotenziali (si vede V = 0 nel punto medio), niente linee ne' sonda (letture lontane dal centro)
+  { testo: "Nel punto medio $V=0$: anche $\\vec E=0$? Prevedi",
+    applica: () => imposta(DIPOLO, 0.3, 0.25, { sonda: false, mostra: "equi" }) },
+  { testo: "No: $V=0$ ma $\\vec E\\ne0$, va dalla $+$ alla $-$",
+    applica: () => imposta(DIPOLO, 0, 0) },
+  { testo: "Cariche uguali: nel punto medio $\\vec E=0$ ma $V\\ne0$",
+    applica: () => imposta([[-0.15, 0, 2], [0.15, 0, 2]], 0, 0) },
+  { testo: "Prova tu: con $q_1=4q_2$ porta P dove $\\vec E=0$",
+    applica: () => imposta([[-0.15, 0, 4], [0.15, 0, 1]], 0, 0.2, { prova: true }) },
+]);
+Doll.pronto();
+</script>
+</body>
+</html>

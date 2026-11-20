@@ -1,0 +1,99 @@
+<!doctype html>
+<!--
+TEMPLATE WEB: grafico 2D interattivo (JSXGraph). Analisi I e II, Metodi matematici, qualsiasi
+"cosa succede alla curva quando cambio un parametro / trascino un punto".
+Esempio: polinomi di Taylor di f(x) = sin x attorno a x0 (punto trascinabile), grado n con slider.
+
+Idee simili: secante -> tangente (derivata), Rolle/Lagrange (punto c), somme di Riemann (n slider),
+epsilon-delta (strisce), serie di potenze e raggio di convergenza, Fourier (n termini),
+retta di carico e punto di lavoro (Circuiti), caratteristica I-V del diodo (Dispositivi).
+
+Guida (prevedi -> osserva -> spiega, guide/didattica.md): grado 1, grado 3, poi la DOMANDA
+"grado 9: fin dove seguira' sin x?" con T_n nascosta, il passo dopo la mostra; il controesempio
+(x0 = 2); l'ultimo passo "Prova tu" con Doll.bersaglio (grado minimo per errore < 1e-3 in x = 2),
+visibile solo in quel passo.
+
+Regole: titolo breve, dati in .doll-dati, didascalie <= ~12 parole, Doll.guida per il percorso
+guidato (ogni passo = uno stato fotografato dal controllo), Doll.pronto() alla fine.
+Build:  .venv/bin/python .claude/skills/spiega/scripts/web_build.py pagina.html
+Check:  .venv/bin/python .claude/skills/spiega/scripts/web_check.py interattivo.html
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Polinomi di Taylor</title>
+<!-- doll:lib jsxgraph -->
+</head>
+<body>
+<header class="doll-top">
+  <h1>Polinomi di Taylor</h1>
+  <div class="doll-dati">$f(x)=\sin x,\quad T_n(x)=\sum_{k=0}^{n}\frac{f^{(k)}(x_0)}{k!}(x-x_0)^k$</div>
+</header>
+<main class="doll-main">
+  <section class="doll-vista" id="vista">
+    <div id="board" style="width:100%;height:100%"></div>
+    <div class="doll-legenda"><i style="background:#2b6cb0"></i>$f(x)$ &nbsp; <i style="background:#dd6b20"></i>$T_n(x)$</div>
+  </section>
+  <aside class="doll-pannello" id="pannello"></aside>
+</main>
+<footer class="doll-didascalia" id="didascalia"></footer>
+
+<script>
+const C = Doll.col;
+const f = Math.sin;
+// derivate k-esime di sin in x0: sin, cos, -sin, -cos
+const der = (k, x) => [Math.sin, Math.cos, x => -Math.sin(x), x => -Math.cos(x)][k % 4](x);
+const fatt = k => (k <= 1 ? 1 : k * fatt(k - 1));
+
+const board = JXG.JSXGraph.initBoard("board", {
+  boundingbox: [-7, 3, 7, -3], axis: true, showCopyright: false, showNavigation: false,
+  pan: { enabled: false }, zoom: { enabled: false },
+  defaultAxes: { x: { ticks: { strokeColor: "#bbb" } }, y: { ticks: { strokeColor: "#bbb" } } }
+});
+let n = 1;
+const x0 = board.create("glider", [0, 0, board.defaultAxes.x], { name: "x_0", size: 5, color: C.arancio, label: { fontSize: 15 } });
+const T = x => { let s = 0; for (let k = 0; k <= n; k++) s += der(k, x0.X()) / fatt(k) * (x - x0.X()) ** k; return s; };
+
+board.create("functiongraph", [f], { strokeColor: C.blu, strokeWidth: 3 });
+const curvaT = board.create("functiongraph", [T], { strokeColor: C.arancio, strokeWidth: 3 });
+board.create("point", [() => x0.X(), () => f(x0.X())], { name: "", size: 3, fixed: true, color: C.testo });
+
+// pannello
+Doll.titoletto(null, "Parametri");
+const sGrado = Doll.slider(null, { label: "grado $n$", min: 0, max: 15, step: 1, value: 1,
+  onInput: v => { n = v; board.update(); aggiorna(); } });
+Doll.titoletto(null, "Letture");
+const lErr = Doll.lettura(null, "errore in $x=x_0+2$");
+const nota = document.createElement("p"); nota.className = "doll-nota";
+nota.textContent = "Trascina il punto arancione sull'asse x per cambiare x₀."; document.getElementById("pannello").appendChild(nota);
+function aggiorna() { const x = x0.X() + 2; lErr(Math.abs(f(x) - T(x)).toExponential(2)); }
+x0.on("drag", aggiorna); aggiorna();
+
+// "Prova tu": con x0 = 0, il grado minimo con errore < 1e-3 in x = 2.
+// Calcolato con SymPy: |sin 2 - T_7(2)| = 1,36e-3 (T_8 = T_7, il termine pari e' nullo), |sin 2 - T_9(2)| = 5,0e-5,
+// quindi n = 9. Tolleranza su x0: |x0| < 0,05 (anche li' n = 7 da' errore > 1,05e-3 e n = 9 < 6,4e-5).
+const prova = Doll.bersaglio(null, { testo: "Con $x_0=0$: il grado minimo con errore in $x=2$ sotto $10^{-3}$",
+  verifica: () => Math.abs(x0.X()) < 0.05 && n === 9,
+  ok: "$n=9$: errore $5\\cdot 10^{-5}$ (con $n=7$ era $1{,}4\\cdot 10^{-3}$)" });
+
+// percorso guidato: ogni passo imposta grado, x0, curva T_n visibile o no, bersaglio visibile o no
+const imposta = (gr, xx, { nascondiT = false, conProva = false } = {}) => {
+  x0.moveTo([xx, 0]); sGrado.set(gr); aggiorna();
+  curvaT.setAttribute({ visible: !nascondiT });
+  if (nascondiT) lErr("?");                                 // la domanda non mostra ancora la risposta
+  prova.mostra(conProva); board.update();
+};
+// muovendo lo slider la curva torna visibile (anche nel passo della domanda)
+sGrado.el.addEventListener("input", () => curvaT.setAttribute({ visible: true }));
+Doll.guida([
+  { testo: "Grado 1: la retta tangente in $x_0$", applica: () => imposta(1, 0) },
+  { testo: "Grado 3: segue la curva un po' più a lungo", applica: () => imposta(3, 0) },
+  { testo: "Grado 9: fin dove seguirà $\\sin x$? Prevedi, poi Avanti", applica: () => imposta(9, 0, { nascondiT: true }) },
+  { testo: "Grado 9: buona approssimazione fino a $|x|\\approx 4$", applica: () => imposta(9, 0) },
+  { testo: "Lontano da $x_0$ l'errore esplode comunque", applica: () => imposta(9, 2) },
+  { testo: "Prova tu: grado minimo con errore $\\lt 10^{-3}$ in $x=2$", applica: () => imposta(1, 0, { conProva: true }) },
+]);
+Doll.pronto();
+</script>
+</body>
+</html>

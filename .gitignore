@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Manim: output di render
+media/
+**/media/
+*.mp4
+*.mov
+*.gif
+*.webm
+
+# LaTeX: file temporanei
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.dvi
+*.xdv
+
+# Sistema / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+tmp/
+
+# Le materie (Analisi 2/, Fisica 1/, ...) sono materiale personale: non versionate.
+/*/
+!/.claude/
+!/.agents/
+!/.codex/
+
+# Bundle web locali di terze parti
+/.claude/skills/spiega/kit/web/lib/*
+!/.claude/skills/spiega/kit/web/lib/VERSIONI.txt

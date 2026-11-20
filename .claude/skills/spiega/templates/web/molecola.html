@@ -1,0 +1,385 @@
+<!doctype html>
+<!--
+TEMPLATE WEB: molecola 3D (3Dmol.js). Chimica: geometria VSEPR, angoli e lunghezze di legame,
+polarita'. Esempio: CH4, NH3, H2O, CO2, SF6, benzene da stringhe XYZ inline (coordinate in angstrom),
+modello a sfere e bastoncini, coppie libere come lobi, dipolo di legame e risultante.
+
+Come adattarlo:
+- Nuova molecola: aggiungi una voce a MOLECOLE con la stringa XYZ (n atomi, commento, "El x y z"),
+  l'atomo centrale, la terna per l'angolo da misurare, i legami doppi/tripli e i dati VSEPR.
+  Angoli, lunghezze e dipolo vengono CALCOLATI dalle coordinate: se i numeri non tornano,
+  sono sbagliate le coordinate (generale con Python: trigonometria o RDKit/ASE se disponibili).
+- Coppie libere: calcolate in automatico per E=1 e E=2; per E>=3 (XeF2, I3-) passa `coppie`
+  con le direzioni esplicite.
+- Guida (prevedi -> osserva -> spiega, guide/didattica.md): CH4; la DOMANDA "NH3 ha una coppia libera:
+  angolo ancora 109.5?" (senza arco, senza lobo, letture degli angoli a "?"), il passo dopo la risposta
+  (~107); H2O; CO2; l'ultimo passo "Prova tu" (Doll.bersaglio, visibile solo li'): trovare una molecola
+  apolare con legami molto polari (Delta chi > 1 su ogni legame) -> SF6.
+
+Idee simili:
+- ibridazione: lobi sp/sp2/sp3 come ellissoidi (addSphere/addCylinder) attorno all'atomo centrale,
+  slider che "mescola" s e p; orbitali molecolari: addIsosurface su una griglia calcolata in JS;
+- reticoli cristallini (CC, CFC, NaCl, diamante): genera gli atomi in un ciclo, disegna la cella
+  con addCylinder, slider per il numero di celle, lettura del fattore di impacchettamento;
+- isomeri (cis/trans, enantiomeri): due modelli affiancati (createViewerGrid) o specchio con slider;
+- conformazioni (etano sfalsato/eclissato, cicloesano sedia/barca): slider dell'angolo diedro
+  che ruota un gruppo di atomi e lettura dell'energia torsionale;
+- VSEPR completo: tabella AXnEm con select (SF4 altalena, ClF3 a T, XeF4 planare quadrata).
+
+Regole: titolo breve, dati in .doll-dati, didascalie <= ~12 parole, Doll.guida per il percorso
+guidato (ogni passo = uno stato fotografato dal controllo), Doll.pronto() alla fine.
+WebGL: 3Dmol crea il canvas con preserveDrawingBuffer=true, quindi gli screenshot di Chrome
+headless funzionano; il contenitore deve avere gia' una dimensione quando chiami createViewer.
+Build:  .venv/bin/python .claude/skills/spiega/scripts/web_build.py pagina.html
+Check:  .venv/bin/python .claude/skills/spiega/scripts/web_check.py interattivo.html
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geometria delle molecole</title>
+<!-- doll:lib 3dmol -->
+<style>
+  #mol { position: absolute; inset: 0; }
+  .doll-legenda span.pt { display: inline-block; width: 11px; height: 11px; border-radius: 50%;
+    border: 1px solid #999; vertical-align: -1px; margin: 0 4px 0 10px; }
+  .doll-legenda span.pt:first-child { margin-left: 0; }
+  .doll-interr label { justify-content: flex-start; gap: 8px; cursor: pointer; margin: 0; }
+  .doll-interr input { accent-color: var(--blu); margin: 0; }
+</style>
+</head>
+<body>
+<header class="doll-top">
+  <h1>Geometria delle molecole</h1>
+  <div class="doll-dati" id="dati"></div>
+</header>
+<main class="doll-main">
+  <section class="doll-vista" id="vista">
+    <div id="mol"></div>
+    <div class="doll-legenda" id="legenda"></div>
+  </section>
+  <aside class="doll-pannello" id="pannello"></aside>
+</main>
+<footer class="doll-didascalia" id="didascalia"></footer>
+
+<script>
+const C = Doll.col;
+
+// ---------------------------------------------------------------- dati
+// Coordinate in angstrom (generate con trigonometria: d e angoli sperimentali).
+// centro = indice dell'atomo centrale; angolo = [a, centro, b] per l'arco misurato;
+// doppi = coppie di indici con legame doppio; vista = rotazioni iniziali [attorno a x, attorno a y].
+const MOLECOLE = {
+  CH4: {
+    nome: "Metano", tex: "\\mathrm{CH_4}", centro: 0, angolo: [1, 0, 2], doppi: [], vista: [-20, 60],
+    axe: "AX_4E_0", elettronica: "tetraedrica", forma: "tetraedrica", ibr: "sp³", ideale: 109.5, muExp: 0,
+    xyz: `5
+CH4
+C     0.0000    0.0000    0.0000
+H     0.6276    0.6276    0.6276
+H    -0.6276   -0.6276    0.6276
+H    -0.6276    0.6276   -0.6276
+H     0.6276   -0.6276   -0.6276` },
+  NH3: {
+    nome: "Ammoniaca", tex: "\\mathrm{NH_3}", centro: 0, angolo: [1, 0, 3], doppi: [], vista: [25, 0],
+    axe: "AX_3E_1", elettronica: "tetraedrica", forma: "piramidale trigonale", ibr: "sp³", ideale: 109.5, muExp: 1.47,
+    xyz: `4
+NH3
+N     0.0000    0.0000    0.0000
+H     0.0000   -0.3810    0.9375
+H    -0.8119   -0.3810   -0.4688
+H     0.8119   -0.3810   -0.4688` },
+  H2O: {
+    nome: "Acqua", tex: "\\mathrm{H_2O}", centro: 0, angolo: [1, 0, 2], doppi: [], vista: [10, 35],
+    axe: "AX_2E_2", elettronica: "tetraedrica", forma: "angolare (a V)", ibr: "sp³", ideale: 109.5, muExp: 1.85,
+    xyz: `3
+H2O
+O     0.0000    0.0000    0.0000
+H     0.7568   -0.5860    0.0000
+H    -0.7568   -0.5860    0.0000` },
+  CO2: {
+    nome: "Anidride carbonica", tex: "\\mathrm{CO_2}", centro: 0, angolo: [1, 0, 2], doppi: [[0, 1], [0, 2]], vista: [45, 20],
+    axe: "AX_2E_0", elettronica: "lineare", forma: "lineare", ibr: "sp", ideale: 180, muExp: 0,
+    xyz: `3
+CO2
+C     0.0000    0.0000    0.0000
+O     1.1600    0.0000    0.0000
+O    -1.1600    0.0000    0.0000` },
+  SF6: {
+    nome: "Esafluoruro di zolfo", tex: "\\mathrm{SF_6}", centro: 0, angolo: [1, 0, 3], doppi: [], vista: [20, 30],
+    axe: "AX_6E_0", elettronica: "ottaedrica", forma: "ottaedrica", ibr: "sp³d²", ideale: 90, muExp: 0,
+    xyz: `7
+SF6
+S     0.0000    0.0000    0.0000
+F     1.5610    0.0000    0.0000
+F    -1.5610    0.0000    0.0000
+F     0.0000    1.5610    0.0000
+F     0.0000   -1.5610    0.0000
+F     0.0000    0.0000    1.5610
+F     0.0000    0.0000   -1.5610` },
+  C6H6: {
+    nome: "Benzene", tex: "\\mathrm{C_6H_6}", centro: 0, angolo: [1, 0, 5], doppi: [[0, 1], [2, 3], [4, 5]], vista: [-50, 0],
+    axe: "AX_3E_0", elettronica: "trigonale planare", forma: "planare (ogni C)", ibr: "sp²", ideale: 120, muExp: 0,
+    xyz: `12
+C6H6
+C     1.2038    0.6950    0.0000
+C     0.0000    1.3900    0.0000
+C    -1.2038    0.6950    0.0000
+C    -1.2038   -0.6950    0.0000
+C    -0.0000   -1.3900    0.0000
+C     1.2038   -0.6950    0.0000
+H     2.1477    1.2400    0.0000
+H     0.0000    2.4800    0.0000
+H    -2.1477    1.2400    0.0000
+H    -2.1477   -1.2400    0.0000
+H    -0.0000   -2.4800    0.0000
+H     2.1477   -1.2400    0.0000` },
+};
+// elettronegativita' di Pauling, raggi covalenti (A), colori "da libro" e colore del testo sopra l'atomo
+const CHI = { H: 2.20, B: 2.04, C: 2.55, N: 3.04, O: 3.44, F: 3.98, Si: 1.90, P: 2.19, S: 2.58, Cl: 3.16, Br: 2.96, I: 2.66, Xe: 2.60 };
+const RCOV = { H: 0.31, B: 0.84, C: 0.76, N: 0.71, O: 0.66, F: 0.57, Si: 1.11, P: 1.07, S: 1.05, Cl: 1.02, Br: 1.20, I: 1.39, Xe: 1.40 };
+const COLORE = { H: "#eeeeee", C: "#4a4a4a", N: "#2b6cb0", O: "#c53030", F: "#7cc46a", S: "#e0b52a", Cl: "#2f9e44", P: "#dd6b20", Xe: "#5fa8b8" };
+const TESTO_SU = { H: "#1d1d1f", C: "#ffffff", N: "#ffffff", O: "#ffffff", F: "#1d1d1f", S: "#1d1d1f", Cl: "#ffffff", P: "#ffffff", Xe: "#1d1d1f" };
+
+// ---------------------------------------------------------------- vettori
+const v = (x, y, z) => ({ x, y, z });
+const add = (a, b) => v(a.x + b.x, a.y + b.y, a.z + b.z), sub = (a, b) => v(a.x - b.x, a.y - b.y, a.z - b.z);
+const mul = (a, k) => v(a.x * k, a.y * k, a.z * k), dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+const cross = (a, b) => v(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+const len = a => Math.hypot(a.x, a.y, a.z), unit = a => mul(a, 1 / len(a));
+const gradi = (a, b) => Math.acos(Math.max(-1, Math.min(1, dot(unit(a), unit(b))))) * 180 / Math.PI;
+// un versore perpendicolare ad a (preferendo il riferimento ref)
+const perp = (a, ref = v(0, 0, 1)) => { let p = cross(a, ref); if (len(p) < 1e-6) p = cross(a, v(1, 0, 0)); return unit(p); };
+
+// ---------------------------------------------------------------- analisi dalle coordinate
+function leggiXYZ(s) {
+  return s.trim().split("\n").slice(2).map(r => { const [e, x, y, z] = r.trim().split(/\s+/); return { e, p: v(+x, +y, +z) }; });
+}
+function legami(at) {  // legato se d < 1.25 (r_i + r_j)
+  const L = [];
+  for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++)
+    if (len(sub(at[i].p, at[j].p)) < 1.25 * ((RCOV[at[i].e] || 0.8) + (RCOV[at[j].e] || 0.8))) L.push([i, j]);
+  return L;
+}
+function analizza(m) {
+  const at = leggiXYZ(m.xyz), L = legami(at), c = at[m.centro].p;
+  const vicini = L.filter(b => b.includes(m.centro)).map(b => (b[0] === m.centro ? b[1] : b[0]));
+  const u = vicini.map(k => unit(sub(at[k].p, c)));
+  // tutti gli angoli distinti attorno all'atomo centrale
+  const ang = [];
+  for (let i = 0; i < u.length; i++) for (let j = i + 1; j < u.length; j++) {
+    const a = gradi(u[i], u[j]); if (!ang.some(x => Math.abs(x - a) < 0.05)) ang.push(a);
+  }
+  ang.sort((a, b) => a - b);
+  const [ia, , ib] = m.angolo;
+  const angolo = gradi(sub(at[ia].p, c), sub(at[ib].p, c));
+  const d = len(sub(at[ia].p, c));
+  // dipolo: somma dei dipoli di legame (chi_j - chi_i) * versore i->j, verso l'atomo piu' elettronegativo
+  const dipLeg = L.map(([i, j]) => {
+    const dchi = (CHI[at[j].e] || 2.5) - (CHI[at[i].e] || 2.5), e = unit(sub(at[j].p, at[i].p));
+    return { i, j, vec: mul(e, dchi) };
+  });
+  const mu = dipLeg.reduce((s, b) => add(s, b.vec), v(0, 0, 0));
+  // normale (se la molecola e' planare) per orientare frecce e archi in modo stabile
+  const cen = mul(at.reduce((s, a) => add(s, a.p), v(0, 0, 0)), 1 / at.length);
+  let normale = null;
+  for (let i = 0; i < at.length && !normale; i++) for (let j = i + 1; j < at.length && !normale; j++) {
+    const n = cross(sub(at[i].p, cen), sub(at[j].p, cen));
+    if (len(n) > 1e-3 && at.every(a => Math.abs(dot(sub(a.p, cen), unit(n))) < 1e-3)) normale = unit(n);
+  }
+  return { at, L, c, vicini, u, ang, angolo, d, dipLeg, mu, cen, normale };
+}
+// direzioni delle coppie libere (E = numero di coppie dalla notazione AXnEm)
+function coppieLibere(m, A) {
+  if (m.coppie) return m.coppie.map(unit);
+  const E = +(m.axe.match(/E_(\d)/) || [0, 0])[1];
+  const s = A.u.reduce((a, b) => add(a, b), v(0, 0, 0));
+  if (E === 0) return [];
+  if (E === 1) return len(s) > 1e-3 ? [mul(unit(s), -1)] : [];
+  if (E === 2) {
+    if (len(s) > 1e-3) {                      // H2O, ClF3: nel piano bisettore, ~109.5 deg tra loro
+      const b = mul(unit(s), -1), n = unit(cross(b, A.u[0])), beta = 54.75 * Math.PI / 180;
+      return [add(mul(b, Math.cos(beta)), mul(n, Math.sin(beta))), add(mul(b, Math.cos(beta)), mul(n, -Math.sin(beta)))];
+    }
+    const n = unit(cross(A.u[0], A.u.find(w => len(cross(A.u[0], w)) > 1e-3)));  // XeF4: sopra e sotto il piano
+    return [n, mul(n, -1)];
+  }
+  return [];
+}
+
+// ---------------------------------------------------------------- viewer 3Dmol
+const viewer = $3Dmol.createViewer(document.getElementById("mol"), { backgroundColor: "white", antialias: true,
+  minimumZoomToDistance: 1 });  // default 5 A: le molecole piccole resterebbero minuscole
+const vis = { etichette: true, angolo: true, coppie: true, dipolo: false, legami: false };
+let attuale = "CH4", A = null;
+
+const stileAtomi = { stick: { radius: 0.09, colorscheme: { prop: "elem", map: COLORE } },
+                     sphere: { scale: 0.22, colorscheme: { prop: "elem", map: COLORE } } };
+
+function freccia(da, a, colore, r = 0.06) {
+  viewer.addArrow({ start: da, end: a, radius: r, radiusRatio: 2.2, mid: 0.78, color: colore });
+}
+// le etichette 3Dmol hanno dimensione fissa in pixel: le riduciamo su schermi piccoli
+const scalaTesto = () => { const el = document.getElementById("mol");
+  return Math.max(0.65, Math.min(1, Math.min(el.clientWidth, el.clientHeight) / 600)); };
+function etichetta(testo, pos, o = {}) {
+  const spec = Object.assign({ position: pos, alignment: "center", inFront: true, fontSize: 15,
+    font: "Helvetica", fontColor: C.testo, showBackground: false }, o);
+  spec.fontSize = Math.round(spec.fontSize * scalaTesto());
+  viewer.addLabel(testo, spec);
+}
+
+// ridisegna tutto; nuovaVista=true riparte dall'orientazione di m.vista, altrimenti tiene la rotazione attuale
+function disegna(nuovaVista = false) {
+  const m = MOLECOLE[attuale];
+  viewer.removeAllModels(); viewer.removeAllShapes(); viewer.removeAllLabels();
+  const mod = viewer.addModel(m.xyz, "xyz");
+  // legami multipli: 3Dmol da XYZ mette tutti legami singoli
+  const atomi = mod.selectedAtoms({});
+  for (const [i, j] of m.doppi) for (const [p, q] of [[i, j], [j, i]]) {
+    const k = atomi[p].bonds.indexOf(atomi[q].index); if (k >= 0) atomi[p].bondOrder[k] = 2;
+  }
+  mod.setStyle({}, stileAtomi);
+  const c = A.c;
+
+  if (vis.etichette) A.at.forEach(a => etichetta(a.e, a.p, { fontColor: TESTO_SU[a.e] || C.testo, fontSize: 20, bold: true }));
+
+  if (vis.coppie) for (const dir of coppieLibere(m, A)) {   // lobo + due puntini
+    const centro = add(c, mul(dir, 0.78)), q = mul(perp(dir, A.normale || v(0, 0, 1)), 0.11);
+    viewer.addSphere({ center: centro, radius: 0.36, color: "#9f8fd6", opacity: 0.45 });
+    viewer.addSphere({ center: add(centro, q), radius: 0.065, color: C.viola });
+    viewer.addSphere({ center: sub(centro, q), radius: 0.065, color: C.viola });
+  }
+
+  if (vis.angolo) {   // arco tra i due legami misurati
+    const [ia, , ib] = m.angolo, u1 = unit(sub(A.at[ia].p, c)), u2 = unit(sub(A.at[ib].p, c));
+    const th = Math.acos(Math.max(-1, Math.min(1, dot(u1, u2))));
+    const p = Math.abs(th - Math.PI) < 1e-3 ? perp(u1, A.normale || v(0, 0, 1))   // 180 deg: arco "sotto"
+                                            : unit(sub(u2, mul(u1, dot(u1, u2))));
+    const R = 0.52, N = 28; let prec = add(c, mul(u1, R));
+    for (let k = 1; k <= N; k++) {
+      const t = th * k / N, pt = add(c, mul(add(mul(u1, Math.cos(t)), mul(p, Math.sin(t))), R));
+      viewer.addCylinder({ start: prec, end: pt, radius: 0.028, color: C.arancio, fromCap: 1, toCap: 1 }); prec = pt;
+    }
+    const bis = add(mul(u1, Math.cos(th / 2)), mul(p, Math.sin(th / 2)));
+    etichetta(A.angolo.toFixed(1) + "°", add(c, mul(bis, R + 0.3)),
+      { fontColor: C.arancio, bold: true, showBackground: true, backgroundColor: "white", backgroundOpacity: 0.85,
+        borderThickness: 0, fontSize: 21 });
+  }
+
+  if (vis.legami) for (const b of A.dipLeg) {   // dipoli di legame, accanto al legame
+    if (len(b.vec) < 1e-6) continue;
+    const pi = A.at[b.i].p, pj = A.at[b.j].p, e = unit(b.vec);
+    let off = perp(sub(pj, pi), A.normale || v(0, 0, 1));
+    if (dot(off, v(0.31, 0.83, 0.47)) < 0) off = mul(off, -1);   // stesso lato per legami paralleli (CO2)
+    off = mul(off, 0.6);
+    const meta = mul(add(pi, pj), 0.5), l = 0.32 + 0.35 * len(b.vec);
+    freccia(add(add(meta, off), mul(e, -l / 2)), add(add(meta, off), mul(e, l / 2)), C.verde, 0.035);
+  }
+
+  if (vis.dipolo && len(A.mu) > 1e-3) {   // risultante, a lato della molecola, con la croce in coda
+    const e = unit(A.mu), lato = A.normale ? unit(cross(A.normale, e)) : perp(e);   // nel piano, se c'e'
+    const dist = Math.max(...A.at.map(a => len(sub(sub(a.p, A.cen), mul(e, dot(sub(a.p, A.cen), e)))))) + 0.8;
+    const L = 0.9 + 0.35 * len(A.mu), base = add(A.cen, mul(lato, dist));
+    const da = add(base, mul(e, -L / 2)), a = add(base, mul(e, L / 2));
+    freccia(da, a, C.blu, 0.06);
+    const croce = add(da, mul(e, 0.22)), q = cross(e, lato);
+    viewer.addCylinder({ start: add(croce, mul(q, 0.16)), end: add(croce, mul(q, -0.16)), radius: 0.035, color: C.blu });
+    etichetta("μ", add(base, mul(lato, 0.38)), { fontColor: C.blu, bold: true, fontSize: 26 });
+  }
+
+  if (nuovaVista) {
+    viewer.setView([0, 0, 0, 0, 0, 0, 0, 1]);       // orientazione di partenza: identita'
+    viewer.rotate(m.vista[0], "vx"); viewer.rotate(m.vista[1], "vy");
+  }
+  viewer.zoomTo();                 // inquadra atomi + forme (lobi, frecce, arco)
+  viewer.zoom(m.zoom || 0.75);     // un po' di margine per le etichette
+  viewer.render();
+}
+
+// ---------------------------------------------------------------- pannello
+// helper locale: interruttore (checkbox) nello stile Doll
+function interruttore(testo, chiave) {
+  const d = document.createElement("div"); d.className = "doll-ctrl doll-interr";
+  d.innerHTML = `<label><input type="checkbox"><span>${testo}</span></label>`;
+  document.getElementById("pannello").appendChild(d);
+  const inp = d.querySelector("input"); inp.checked = vis[chiave];
+  inp.addEventListener("change", () => { vis[chiave] = inp.checked; disegna(); });
+  return { set: x => { inp.checked = vis[chiave] = x; } };
+}
+
+Doll.titoletto(null, "Molecola");
+const sMol = Doll.scelta(null, { opzioni: Object.entries(MOLECOLE).map(([k, m]) => [k, m.nome]), value: attuale,
+  onChange: k => carica(k) });
+Doll.titoletto(null, "Dalle coordinate");
+const lAng = Doll.lettura(null, "angolo misurato"), lIdeale = Doll.lettura(null, "ideale VSEPR"),
+      lTutti = Doll.lettura(null, "angoli distinti"), lD = Doll.lettura(null, "lunghezza di legame"),
+      lMu = Doll.lettura(null, "dipolo (modello Δχ)"), lExp = Doll.lettura(null, "μ sperimentale");
+Doll.titoletto(null, "VSEPR");
+const lEl = Doll.lettura(null, "geometria elettronica"), lIbr = Doll.lettura(null, "ibridazione");
+Doll.titoletto(null, "Mostra");
+const T = { etichette: interruttore("simboli degli atomi", "etichette"), angolo: interruttore("angolo di legame", "angolo"),
+            coppie: interruttore("coppie libere", "coppie"), legami: interruttore("dipoli di legame", "legami"),
+            dipolo: interruttore("momento di dipolo risultante", "dipolo") };
+const anim = Doll.animazione(dt => { viewer.rotate(dt * 35, "vy"); });   // rotazione automatica
+const nota = document.createElement("p"); nota.className = "doll-nota";
+nota.textContent = "Trascina per ruotare, rotellina per lo zoom. Il modello Δχ somma i dipoli di legame (verso l'atomo più elettronegativo) e ignora le coppie libere.";
+document.getElementById("pannello").appendChild(nota);
+
+function carica(k) {
+  attuale = k; const m = MOLECOLE[k]; A = analizza(m);
+  if (sMol.value() !== k) sMol.el.value = k;
+  const s = n => A.at[n].e, [ia, ic, ib] = m.angolo;
+  document.getElementById("dati").innerHTML = `$${m.tex}$ · $\\mathrm{${m.axe}}$ · ${m.forma}`;
+  lEl(m.elettronica); lIbr(m.ibr);
+  lAng(`${s(ia)}–${s(ic)}–${s(ib)} = ${A.angolo.toFixed(1)}°`); lIdeale(m.ideale.toFixed(1) + "°");
+  lTutti(A.ang.map(a => a.toFixed(1) + "°").join(" · "));
+  lD(`${s(ic)}–${s(ia)} = ${A.d.toFixed(3)} Å`);
+  const mu = len(A.mu);
+  lMu(mu < 1e-3 ? "0 → apolare" : mu.toFixed(2) + " → polare");
+  lExp(m.muExp.toFixed(2) + " D");
+  // legenda: elementi presenti + simboli
+  const el = [...new Set(A.at.map(a => a.e))];
+  document.getElementById("legenda").innerHTML =
+    el.map(e => `<span class="pt" style="background:${COLORE[e]}"></span>${e}`).join("") +
+    (coppieLibere(m, A).length ? `<span class="pt" style="background:#c9bfea"></span>coppia libera` : "");
+  Doll.tex(document.getElementById("dati")); disegna(true);
+}
+window.addEventListener("resize", () => { viewer.resize(); disegna(); });
+carica(attuale);
+
+// ---------------------------------------------------------------- percorso guidato
+// "Prova tu": una molecola apolare con legami molto polari, cioe' mu = 0 (modello Delta chi) e |Delta chi| > 1 su
+// ogni legame, con i dipoli di legame accesi. Calcolato con NumPy dalle coordinate qui sopra:
+//   CH4 mu = 0 ma Delta chi = 0,35; CO2 mu = 0 ma 0,89; C6H6 mu = 0 ma C-C 0; H2O 1,24 ma mu = 1,52;
+//   SF6 mu = 0 e Delta chi = 1,40 -> unica risposta: SF6.
+const prova = Doll.bersaglio(null, { testo: "Trova una molecola apolare con $\\Delta\\chi\\gt 1$ su ogni legame; accendi i dipoli di legame",
+  verifica: () => vis.legami && len(A.mu) < 1e-3 &&
+    A.L.every(([i, j]) => Math.abs((CHI[A.at[i].e] || 2.5) - (CHI[A.at[j].e] || 2.5)) > 1),
+  ok: "$\\mathrm{SF_6}$: $\\Delta\\chi=1{,}4$, ma i sei dipoli si annullano: $\\mu=0$" });
+sMol.el.parentElement.after(prova.el);                 // in cima al pannello, sotto la scelta della molecola
+// domanda: le letture degli angoli non danno la risposta
+const passo = (k, mostra, { domanda = false, conProva = false } = {}) => () => {
+  anim.pausa();
+  for (const [c, t] of Object.entries(T)) t.set(!!mostra[c]);
+  carica(k);
+  if (domanda) { lAng("?"); lTutti("?"); }
+  prova.mostra(conProva);
+};
+Doll.guida([
+  { testo: "$\\mathrm{CH_4}$: quattro legami, tetraedro perfetto a $109.5^\\circ$",
+    applica: passo("CH4", { etichette: 1, angolo: 1 }) },
+  { testo: "$\\mathrm{NH_3}$ ha una coppia libera: angolo ancora $109.5^\\circ$? Prevedi, poi Avanti",
+    applica: passo("NH3", { etichette: 1 }, { domanda: true }) },
+  { testo: "La coppia libera stringe gli angoli a $\\approx 107^\\circ$",
+    applica: passo("NH3", { etichette: 1, angolo: 1, coppie: 1 }) },
+  { testo: "$\\mathrm{H_2O}$: due coppie libere, $104.5^\\circ$, molecola polare",
+    applica: passo("H2O", { etichette: 1, angolo: 1, coppie: 1, dipolo: 1 }) },
+  { testo: "$\\mathrm{CO_2}$ lineare: i dipoli di legame si annullano",
+    applica: passo("CO2", { etichette: 1, angolo: 1, legami: 1 }) },
+  { testo: "Prova tu: un'altra molecola apolare con legami molto polari",
+    applica: passo("CH4", { etichette: 1, legami: 1 }, { conProva: true }) },
+]);
+Doll.pronto();
+</script>
+</body>
+</html>

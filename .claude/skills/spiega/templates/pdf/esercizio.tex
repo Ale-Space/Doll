@@ -1,0 +1,301 @@
+% =====================================================================
+%  TEMPLATE PDF: ESERCIZIO  (esempio completo: circuito RLC serie in regime sinusoidale)
+% =====================================================================
+%  Come adattarlo
+%  - Copia in $P/dispensa.tex, cambia contenuti e numeri, compila con
+%      .claude/skills/spiega/scripts/pdf_build.sh "$P"
+%    e guarda $P/dispensa_pagine.png con Read.
+%  - Sezioni OBBLIGATORIE, in quest'ordine (didattica: guide/didattica.md):
+%      titolo (\dolltitolo) -> obiettivi (con prerequisiti) -> previsione -> Il testo (trascrizione esatta + dati + schema se c'e')
+%      -> idea -> metodo (il metodo GENERALE per questo tipo di esercizio, 4-7 passi)
+%      -> Soluzione passo per passo (un "passo" per ogni passaggio, con \perche{...})
+%      -> risultato -> attenzione (errori tipici all'esame) -> nelvideo (se c'e' un video
+%      o una pagina interattiva) -> preconcetto -> esercizio da completare (\vuoto) -> 2 esercizi
+%      per allenarsi con \risposta{...} -> autoverifica (3-5 domande con \soluzione{...}) -> ripasso.
+%  - FACOLTATIVE: definizione/teorema/dimostrazione (solo se servono davvero per
+%    capire il metodo; la dimostrazione e' mostrata in teorema.tex), esempio, controesempio, una sezione "oltre l'esercizio"
+%    (es. cosa succede al variare di un parametro, con un grafico).
+%  - Lunghezza: 2-4 pagine. Completo ma senza riempitivi: ogni frase deve servire a
+%    risolvere l'esercizio o a non sbagliarlo. Niente ripetizioni del video.
+%  - Numeri: ogni valore deve essere verificato con SymPy. Unita' con siunitx
+%    (\qty{30}{\ohm}, \num{0.6}, \ang{53.13}): la virgola decimale la mette lui.
+%  - Figure: \dollfigura{figure/f1.png}{didascalia} e
+%    \dollfotogrammi[didascalia]{figure/f1.png :: testo}{figure/f2.png :: testo}{...}
+%    Le immagini si estraggono con scripts/figure.py (video o pagina web) nella
+%    sottocartella figure/. Se mancano compare un segnaposto: la compilazione non fallisce.
+%  - Schemi: circuitikz (resistori europei, induttori a spire, tensioni con +/-),
+%    grafici: pgfplots con lo stile [doll], diagrammi: TikZ con i colori dollblu,
+%    dollarancio, dollverde, dollrosso, dollviola.
+% =====================================================================
+\documentclass[10pt]{article}
+\usepackage{doll}
+
+\begin{document}
+
+\dolltitolo{Circuito RLC serie in regime sinusoidale}
+           {Elettrotecnica \textperiodcentered\ fasori, impedenze e potenze}
+           {Esercizio}
+
+\begin{obiettivi}
+Saprai risolvere un circuito in regime sinusoidale con i fasori: impedenze, corrente, tensioni sui componenti e
+potenze. \textbf{Prerequisiti}: numeri complessi in forma algebrica e polare; legge di Ohm e leggi di Kirchhoff.
+\end{obiettivi}
+
+\begin{previsione}
+In un RLC serie, la tensione su uno dei componenti può avere un'ampiezza \emph{maggiore} di quella del
+generatore? Prova a rispondere prima di leggere (la risposta è nell'esercizio sulla risonanza).
+\end{previsione}
+
+\section{Il testo}
+
+\dollaccanto[0.56]{%
+Il circuito in figura è alimentato dalla tensione $v(t) = 100\cos(1000\,t)\ \unit{\volt}$
+ed è in regime sinusoidale. Sono noti $R = \qty{30}{\ohm}$, $L = \qty{90}{\milli\henry}$,
+$C = \qty{20}{\micro\farad}$. Calcolare:
+\begin{enumerate}[(a)]
+  \item l'impedenza equivalente $\dot Z$ vista dal generatore;
+  \item la corrente $i(t)$ e il suo sfasamento rispetto a $v(t)$;
+  \item le tensioni su resistore, induttore e condensatore;
+  \item le potenze attiva, reattiva, apparente e il fattore di potenza.
+\end{enumerate}}{%
+\begin{circuitikz}[scale=0.82, transform shape]
+  \draw (0,0) to[sV, v<=$v(t)$, invert] (0,3)
+        to[short, i=$i(t)$] (1.0,3)
+        to[R, l=$R$, v=$v_R$] (3.2,3)
+        to[L, l=$L$, v=$v_L$] (5.4,3)
+        -- (5.9,3)
+        to[C, l=$C$, v=$v_C$] (5.9,0)
+        -- (0,0);
+\end{circuitikz}
+\captionof{figure}{Un'unica maglia: la stessa corrente in tutti i componenti.}}
+
+\begin{idea}
+Ogni grandezza $a(t) = A_M\cos(\omega t + \alpha)$ diventa un numero complesso, il \emph{fasore}
+$\fasore{A} = A_M\,\e^{\jj\alpha}$, e derivare diventa moltiplicare per $\jj\omega$. Le equazioni differenziali
+diventano algebriche: si risolve il circuito come in continua, con le \emph{impedenze} al posto delle resistenze.
+\end{idea}
+
+\section{Il metodo per i circuiti in regime sinusoidale}
+
+\begin{metodo}
+  \item \textbf{Leggi il generatore}: ricava $\omega$ (se è data $f$, allora $\omega = 2\pi f$),
+        l'ampiezza e la fase. Decidi se usi fasori a valore \emph{massimo} o \emph{efficace}, e tienilo fisso.
+  \item \textbf{Trasforma il circuito}: ogni componente diventa un'impedenza,
+        $\dot Z_R = R$, $\dot Z_L = \jj\omega L$, $\dot Z_C = 1/(\jj\omega C) = -\jj/(\omega C)$.
+  \item \textbf{Risolvi come in continua}: serie e parallelo, partitori, Kirchhoff, Thévenin\ldots\ con i numeri complessi.
+  \item \textbf{Torna nel tempo}: da $I_M\angle\varphi$ scrivi $i(t) = I_M\cos(\omega t + \varphi)$, con $\varphi$ in radianti.
+  \item \textbf{Potenze e verifica}: $\dot S = \tfrac12 \fasore{V}\,\fasore{I}^{*} = P + \jj Q$ (fasori massimi), controlla con
+        Boucherot; le tensioni di maglia sommate come \emph{vettori} devono ridare il generatore.
+\end{metodo}
+
+\begin{definizione}{impedenza}
+Per un bipolo in convenzione degli utilizzatori, $\dot Z = \fasore{V}/\fasore{I} = R + \jj X$: $R$ è la resistenza,
+$X$ la \emph{reattanza} ($X>0$ induttivo, $X<0$ capacitivo), $\varphi = \arg\dot Z$ è l'anticipo della tensione sulla corrente.
+Da $v_L = L\,\dd i/\dd t$ e $i_C = C\,\dd v_C/\dd t$, poiché derivare un fasore vuol dire moltiplicarlo per $\jj\omega$:
+$\dot Z_L = \jj\omega L$, $\dot Z_C = 1/(\jj\omega C)$.
+\end{definizione}
+
+
+\section{Soluzione passo per passo}
+
+Fasori a valore massimo, generatore come riferimento delle fasi: $\fasore{V} = \polare{100}{0}\ \unit{\volt}$, $\omega = \qty{1000}{\radian\per\second}$.
+
+\begin{passo}{Impedenze dei componenti}
+Sostituiamo ogni componente con la sua impedenza alla pulsazione del generatore:
+\[
+  \dot Z_R = \qty{30}{\ohm}, \qquad
+  \dot Z_L = \jj\omega L = \jj\,(1000)(0{,}09) = \jj\,\qty{90}{\ohm}, \qquad
+  \dot Z_C = \frac{1}{\jj\omega C} = \frac{-\jj}{(1000)(2\cdot 10^{-5})} = -\jj\,\qty{50}{\ohm}.
+\]
+\perche{con i fasori ogni componente diventa una \guillemotleft resistenza complessa\guillemotright. Il meno del condensatore viene da $1/\jj = -\jj$.}
+\end{passo}
+
+\begin{passo}{Impedenza equivalente}
+Sommiamo le tre impedenze:
+\[
+  \dot Z = \dot Z_R + \dot Z_L + \dot Z_C = 30 + \jj\,(90 - 50) = (30 + \jj\,40)\ \unit{\ohm}
+  = \polare{50}{53.13}\ \unit{\ohm},
+\]
+con $\abs{\dot Z} = \sqrt{30^2 + 40^2} = \qty{50}{\ohm}$ e $\varphi = \arctan(40/30) = \ang{53.13} = \qty{0.9273}{\radian}$.
+\perche{in serie passa la stessa corrente, quindi (Kirchhoff sui fasori) le impedenze si sommano.
+$X = \qty{40}{\ohm} > 0$: il circuito è \emph{ohmico-induttivo}, la corrente sarà in ritardo sulla tensione.}
+\end{passo}
+
+\begin{passo}{Corrente}
+Dividiamo il fasore della tensione per l'impedenza:
+\[
+  \fasore{I} = \frac{\fasore{V}}{\dot Z} = \frac{\polare{100}{0}}{\polare{50}{53.13}}
+  = \polare{2}{-53.13}\ \unit{\ampere} = (1{,}2 - \jj\,1{,}6)\ \unit{\ampere}
+  \quad\Longrightarrow\quad
+  i(t) = 2\cos(1000\,t - 0{,}9273)\ \unit{\ampere}.
+\]
+\perche{è la legge di Ohm simbolica: in forma polare i moduli si dividono e le fasi si sottraggono.
+Nel tempo la fase va in radianti, come $1000\,t$.}
+\end{passo}
+
+\begin{passo}{Tensioni sui componenti e diagramma fasoriale}
+Moltiplichiamo la corrente per ciascuna impedenza:
+\[
+  \fasore{V}_R = R\,\fasore{I} = \polare{60}{-53.13}\ \unit{\volt}, \quad
+  \fasore{V}_L = \jj 90\,\fasore{I} = \polare{180}{36.87}\ \unit{\volt}, \quad
+  \fasore{V}_C = -\jj 50\,\fasore{I} = \polare{100}{-143.13}\ \unit{\volt}.
+\]
+In forma algebrica: $(36 - \jj 48) + (144 + \jj 108) + (-80 - \jj 60) = 100 + \jj 0$: la somma ridà proprio $\fasore{V}$.
+\dollaccanto[0.44]{\perche{moltiplicare per $\jj$ ruota di $+\ang{90}$, per $-\jj$ di $-\ang{90}$: $\fasore{V}_L$ è in anticipo
+di $\ang{90}$ sulla corrente, $\fasore{V}_C$ in ritardo, $\fasore{V}_R$ in fase. $\fasore{V}_L$ e $\fasore{V}_C$ sono opposte
+e in gran parte si cancellano: per questo $V_{L,M} = \qty{180}{\volt}$ supera i \qty{100}{\volt} del generatore.}}{%
+\begin{tikzpicture}[scale=0.6, >={Stealth[length=6pt]}, font=\small]
+  % assi del piano complesso (1 cm = 25 V)
+  \draw[dollbordo!70!dolltenue, ->] (-0.4,0) -- (8.0,0) node[right, text=dolltenue] {Re};
+  \draw[dollbordo!70!dolltenue, ->] (0,-2.8) -- (0,2.9) node[above, text=dolltenue] {Im};
+  % corrente (scala 1 A = 1,5 cm)
+  \draw[->, dollarancio, line width=1.1pt] (0,0) -- (1.8,-2.4) node[below right=-1pt] {$\fasore{I}$};
+  % tensioni in catena: V_R, poi V_L, poi V_C
+  \draw[->, dollblu, line width=1.6pt] (0,0) -- (1.44,-1.92) node[midway, left=3pt] {$\fasore{V}_R$};
+  \draw[->, dollverde, line width=1.6pt] (1.44,-1.92) -- (7.2,2.4) node[pos=0.72, above left] {$\fasore{V}_L$};
+  % V_C e' parallelo a V_L (entrambi perpendicolari a I): lo disegniamo spostato di poco
+  \draw[->, dollrosso, line width=1.6pt] ($(7.2,2.4)+(0.17,-0.22)$) -- ($(4,0)+(0.17,-0.22)$)
+     node[pos=0.45, below right] {$\fasore{V}_C$};
+  \draw[dollrosso, densely dotted] ($(4,0)+(0.17,-0.22)$) -- (4,0);
+  % tensione del generatore
+  \draw[->, dolltesto, line width=1.8pt] (0,0) -- (4,0) node[below=2pt, pos=0.55] {$\fasore{V}$};
+  % angolo phi
+  \draw[dolltenue] (1.1,0) arc[start angle=0, end angle=-53.13, radius=1.1];
+  \node[dolltenue] at (1.35,-0.55) {$\varphi$};
+\end{tikzpicture}
+\captionof{figure}{Diagramma fasoriale: le tre tensioni in catena chiudono su $\fasore{V}$; $\fasore{I}$ è in ritardo di $\varphi$.}}
+\end{passo}
+
+\begin{passo}{Potenze e fattore di potenza}
+Calcoliamo la potenza complessa erogata dal generatore:
+\[
+  \dot S = \tfrac12\,\fasore{V}\,\fasore{I}^{*} = \tfrac12\,(\polare{100}{0})(\polare{2}{53.13})
+  = \polare{100}{53.13} = (60 + \jj\,80)\ \unit{\voltampere}.
+\]
+Quindi $P = \qty{60}{\watt}$, $Q = \qty{80}{\var}$, $S = \qty{100}{\voltampere}$, $\cos\varphi = 60/100 = \num{0.6}$ (in ritardo).
+\perche{solo il resistore assorbe potenza attiva, $P = \tfrac12 R I_M^2 = \qty{60}{\watt}$; la reattiva è la somma con
+segno (Boucherot): $Q_L = \tfrac12 X_L I_M^2 = \qty{180}{\var}$, $Q_C = -\qty{100}{\var}$, $Q_L + Q_C = \qty{80}{\var}$.}
+\end{passo}
+
+\begin{teorema}{di Boucherot}
+In una rete in regime sinusoidale la potenza complessa erogata dai generatori è la somma delle potenze
+complesse assorbite dagli altri bipoli: $P$ e $Q$ si conservano separatamente.
+\end{teorema}
+
+\begin{risultato}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}l@{\qquad}l@{}}
+  impedenza & $\dot Z = (30 + \jj 40)\ \unit{\ohm} = \polare{50}{53.13}\ \unit{\ohm}$ \\
+  corrente  & $i(t) = 2\cos(1000\,t - 0{,}927)\ \unit{\ampere}$, \ in ritardo di $\ang{53.13}$ \\
+  tensioni (ampiezze) & $V_R = \qty{60}{\volt}$, \ $V_L = \qty{180}{\volt}$, \ $V_C = \qty{100}{\volt}$ \\
+  potenze   & $P = \qty{60}{\watt}$, \ $Q = \qty{80}{\var}$, \ $S = \qty{100}{\voltampere}$, \ $\cos\varphi = \num{0.6}$
+\end{tabular}
+\end{risultato}
+
+\begin{attenzione}
+\begin{itemize}
+  \item \textbf{Gradi o radianti.} $\omega t$ è in radianti: scrivi $\cos(1000\,t - 0{,}927)$, non
+        $\cos(1000\,t - 53{,}13)$. Controlla la modalità DEG/RAD della calcolatrice.
+  \item \textbf{Massimo o efficace.} Qui \qty{100}{\volt} è l'ampiezza; il valore efficace è
+        $100/\sqrt2 \approx \qty{70.7}{\volt}$. Con i fasori massimi $P = \tfrac12 V_M I_M\cos\varphi$: scrivere
+        $V_M I_M \cos\varphi = \qty{120}{\watt}$ (il doppio) è l'errore più comune.
+  \item \textbf{Il segno del condensatore.} $\dot Z_C = 1/(\jj\omega C) = -\jj/(\omega C)$: dimenticare il meno fa
+        sommare le reattanze invece di sottrarle.
+  \item \textbf{L'arcotangente sbaglia quadrante.} Per $\fasore{V}_C = -80 - \jj 60$, $\arctan(60/80) = \ang{36.87}$, ma il
+        fasore è nel terzo quadrante: la fase è $\ang{-143.13}$. Disegna sempre il punto.
+\end{itemize}
+\end{attenzione}
+
+\begin{controesempio}[Le ampiezze non si sommano]
+$V_R + V_L + V_C = 60 + 180 + 100 = \qty{340}{\volt} \neq \qty{100}{\volt}$: Kirchhoff vale per i valori istantanei e per i fasori, non per le ampiezze.
+\end{controesempio}
+
+\begin{esempio}[Oltre l'esercizio: la risonanza]
+\dollaccanto[0.4]{%
+L'ampiezza $I_M = V_M/\abs{\dot Z(\omega)}$ è massima quando le reattanze si cancellano, a
+$\omega_0 = 1/\sqrt{LC} \approx \qty{745.4}{\radian\per\second}$: lì $\dot Z = R$ e $I_M = \qty{3.33}{\ampere}$.
+
+Fattore di qualità $Q_0 = \omega_0 L/R = \sqrt5$; banda $B = R/L \approx \qty{333}{\radian\per\second}$ (in verde).
+Sopra $\omega_0$ il circuito è induttivo, sotto capacitivo.}{%
+\begin{tikzpicture}
+\begin{axis}[doll, width=\linewidth, height=0.5\linewidth,
+    xmin=0, xmax=2600, ymin=0, ymax=3.9,
+    xlabel={$\omega$}, ylabel={$I_M$ [\unit{\ampere}]},
+    xtick={500,1000,1500,2000,2500}, ytick={1,2,3},
+    scaled x ticks=false, x tick label style={/pgf/number format/1000 sep={}, font=\footnotesize},
+    y tick label style={font=\footnotesize}]
+  \addplot[dollblu, domain=60:2600, samples=300, smooth]
+    {100/sqrt(900 + (0.09*x - 50000/x)^2)};
+  \addplot[dollverde, dashed, line width=0.8pt] coordinates {(597.1,0) (597.1,2.357) (930.4,2.357) (930.4,0)};
+  \addplot[only marks, mark=*, mark size=2.2pt, dollarancio] coordinates {(1000,2)};
+  \addplot[only marks, mark=*, mark size=2.2pt, dollrosso] coordinates {(745.4,3.333)};
+  \node[dollarancio, right=3pt, font=\footnotesize] at (axis cs:1000,2) {esercizio: \qty{2}{\ampere}};
+  \node[dollrosso, right=3pt, font=\footnotesize] at (axis cs:745.4,3.333) {$\omega_0$: \qty{3.33}{\ampere}};
+\end{axis}
+\end{tikzpicture}}
+\end{esempio}
+
+\section{Nel video e nella pagina interattiva}
+
+\begin{nelvideo}[finale.mp4, interattivo.html]
+\dollaccanto[0.6]{%
+\momento{0:03}{i fasori ruotano insieme a velocità $\omega$; la proiezione sull'asse reale è il valore istantaneo.}
+\momento{0:12}{$\fasore{V}_R$, $\fasore{V}_L$, $\fasore{V}_C$ in catena chiudono su $\fasore{V}$ (passo 4).}
+\momento{0:24}{il triangolo delle potenze $P$, $Q$, $S$ (passo 5).}
+\statoweb{2}{muovi lo slider di $\omega$: a $\omega_0$ le frecce di $L$ e $C$ diventano uguali e opposte.}}{%
+\dollfigura[1]{figure/f4.png}{La pagina interattiva alla risonanza.}}
+\end{nelvideo}
+
+\dollfotogrammi[Tre fotogrammi del video.]
+  {figure/f1.png :: i fasori che ruotano}
+  {figure/f2.png :: la catena delle tensioni}
+  {figure/f3.png :: il triangolo delle potenze}
+
+\begin{preconcetto}
+\guillemotleft La tensione del generatore è la somma delle tensioni lette con il voltmetro su $R$, $L$ e $C$\guillemotright: falso.
+Si sommano i \emph{fasori}, non le ampiezze: le tensioni su $L$ e su $C$ sono in opposizione di fase e in parte si
+cancellano. Per questo un'ampiezza può superare quella del generatore.
+\end{preconcetto}
+
+\section{Esercizi per allenarsi}
+
+\begin{esercizio}[da completare]
+Un carico RL serie ha $R = \qty{8}{\ohm}$ e $X_L = \qty{6}{\ohm}$. Completa: $\abs{\dot Z} = \sqrt{R^2 + X_L^2} = \vuoto\ \unit{\ohm}$
+e $\cos\varphi = R/\abs{\dot Z} = \vuoto$.
+\risposta{$\abs{\dot Z} = \sqrt{64 + 36} = \qty{10}{\ohm}$, $\cos\varphi = 8/10 = \num{0.8}$.}
+\end{esercizio}
+
+\begin{esercizio}[risonanza]
+Per lo stesso circuito, trovare la pulsazione per cui la corrente è in fase con la tensione. Quanto valgono
+in quel caso l'ampiezza della corrente, la potenza attiva e l'ampiezza della tensione sull'induttore?
+\risposta{In fase significa $X = 0$: $\omega_0 = 1/\sqrt{LC} = 1000\sqrt5/3 \approx \qty{745.4}{\radian\per\second}$.
+Allora $\dot Z = R$, $I_M = 100/30 \approx \qty{3.33}{\ampere}$, $P = \tfrac12 V_M I_M \approx \qty{166.7}{\watt}$,
+$V_{L,M} = \omega_0 L\,I_M = Q_0 V_M = 100\sqrt5 \approx \qty{223.6}{\volt}$ (sovratensione: più del doppio del generatore).}
+\end{esercizio}
+
+\begin{esercizio}[rifasamento]
+Un carico RL serie con $R = \qty{8}{\ohm}$ e $L = \qty{12}{\milli\henry}$ è alimentato da $v(t) = 20\cos(500\,t)\ \unit{\volt}$.
+(a) Calcolare $\dot Z$, $i(t)$, $P$ e $\cos\varphi$. (b) Quale condensatore in serie porta $\cos\varphi$ a 1? Quanto vale allora $P$?
+\risposta{(a) $\dot Z = 8 + \jj 6 = \polare{10}{36.87}\ \unit{\ohm}$, $i(t) = 2\cos(500\,t - 0{,}6435)\ \unit{\ampere}$,
+$P = \tfrac12 (8)(2^2) = \qty{16}{\watt}$, $\cos\varphi = \num{0.8}$.
+(b) Serve $1/(\omega C) = \omega L = \qty{6}{\ohm}$, cioè $C = 1/(\omega^2 L) \approx \qty{333}{\micro\farad}$.
+Allora $\dot Z = \qty{8}{\ohm}$, $I_M = \qty{2.5}{\ampere}$ e $P = \qty{25}{\watt}$.}
+\end{esercizio}
+
+\begin{autoverifica}
+\item Perché in un RLC serie la corrente è la stessa in tutti i componenti?
+  \soluzione{C'è un solo ramo: per la legge dei nodi la corrente che entra in un componente è quella che esce.}
+\item Se $X_L > X_C$, la corrente è in anticipo o in ritardo sulla tensione?
+  \soluzione{In ritardo: la reattanza totale è positiva, $\varphi > 0$, il carico è induttivo.}
+\item Perché la potenza attiva è assorbita solo dal resistore?
+  \soluzione{In $L$ e in $C$ tensione e corrente sono in quadratura: la potenza media su un periodo è nulla.}
+\end{autoverifica}
+
+\begin{ripasso}
+\begin{itemize}
+  \item Scrivi le impedenze di $R$, $L$, $C$ e disegna il triangolo delle potenze.
+  \item Rifai l'esercizio sulla risonanza senza guardare la soluzione.
+\end{itemize}
+\end{ripasso}
+
+\end{document}

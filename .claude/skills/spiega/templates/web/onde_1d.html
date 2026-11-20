@@ -1,0 +1,377 @@
+<!doctype html>
+<!--
+TEMPLATE WEB: onde in 1D su canvas (Fisica I e II, Elettromagnetismo applicato, Acustica).
+Esempio con tre situazioni (select "Situazione"):
+  - onda progressiva su una corda  y(x,t) = A sin(kx - wt): la forma trasla a velocita' v = lambda f,
+    il punto P oscilla sul posto (pannello in basso: y(t) in P);
+  - linea di trasmissione chiusa su un carico Z_L: onda incidente + riflessa con coefficiente
+    Gamma = (Z_L - Z_0)/(Z_L + Z_0) (dato come |Gamma| e fase, oppure da z_L = Z_L/Z_0 = r + jx);
+    inviluppo |V(z)| = A |1 + Gamma e^{2j beta z}|, ROS (VSWR) = (1+|Gamma|)/(1-|Gamma|), primo minimo;
+  - battimenti: somma di due onde di frequenze vicine f e f + df; inviluppo a frequenza df.
+Animazione con Doll.animazione (Play/Pausa); il punto P si trascina col mouse.
+
+Come e' fatto (per adattarlo): ogni situazione e' una funzione onda(x, t) piu' qualche curva extra
+in disegnaSopra(); il pannello in basso campiona onda(xP, t') sugli ultimi secondi. Il resto
+(assi, riquadri, trascinamento, gruppi di controlli mostrati per situazione) e' generico.
+
+Idee per esercizi simili:
+- Elettromagnetismo applicato: impedenza d'ingresso lungo la linea
+  Z_in(d) = Z_0 (Z_L + j Z_0 tan(beta d)) / (Z_0 + j Z_L tan(beta d)) come lettura su P;
+  carta di Smith in un secondo canvas: Gamma(d) = Gamma_L e^{-2j beta d} gira su un cerchio di raggio
+  |Gamma| al muoversi di P (mezzo giro ogni lambda/4); adattamento con stub o trasformatore lambda/4;
+  transitorio su linea (gradino che rimbalza tra generatore e carico, diagramma a traliccio).
+- Fisica II: onda piana EM, E(x,t) e B(x,t) = E/c in fase su due piani ortogonali (vista 3D con
+  three, oppure due pannelli); onda stazionaria tra due specchi (cavita'), polarizzazione.
+- Fisica I / corde: modi normali di una corda fissa (Gamma = -1 su entrambi gli estremi, f_n = n v/2L),
+  estremo libero (Gamma = +1), giunzione tra due corde con impedenze diverse (T = 1 + Gamma).
+- Acustica: tubo aperto/chiuso (pressione vs spostamento, nodi e ventri sfasati di lambda/4),
+  effetto Doppler (sorgente mobile), battimenti per accordare uno strumento.
+- Fourier / segnali: somma di N armoniche (onda quadra, Gibbs), velocita' di gruppo vs di fase
+  con una relazione di dispersione omega(k) non lineare (pacchetto che si deforma).
+
+Regole: titolo breve, dati in .doll-dati, didascalie <= ~12 parole, Doll.guida per il percorso
+guidato (ogni passo = uno stato fotografato dal controllo), Doll.pronto() alla fine.
+Build:  .venv/bin/python .claude/skills/spiega/scripts/web_build.py pagina.html
+Check:  .venv/bin/python .claude/skills/spiega/scripts/web_check.py interattivo.html
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Onde su corde e linee</title>
+<!-- doll:lib katex -->
+<style>
+  #vista canvas { touch-action: none; }
+  #legenda { left: auto; right: 12px; }
+  .doll-legenda i.tratto { background: none; border-top: 2px dashed #6b6b70; height: 0; width: 18px; }
+  /* mobile: con un pannello lungo doll.css lascerebbe la didascalia sopra il pannello; qui la pagina cresce */
+  @media (max-width: 820px) { html, body { height: auto; } .doll-main { flex: none; } }
+</style>
+</head>
+<body>
+<header class="doll-top">
+  <h1>Onde su corde e linee</h1>
+  <div class="doll-dati" id="formule"></div>
+</header>
+<main class="doll-main">
+  <section class="doll-vista" id="vista">
+    <div class="doll-legenda" id="legenda"></div>
+  </section>
+  <aside class="doll-pannello" id="pannello"></aside>
+</main>
+<footer class="doll-didascalia" id="didascalia"></footer>
+
+<script>
+const C = Doll.col;
+const L = 6;              // lunghezza della corda mostrata [m]
+const NL = 2.25;          // tratto di linea mostrato [lunghezze d'onda], carico in z = 0
+const F_LINEA = 0.5;      // frequenza dell'animazione per la linea: tempo "rallentato" [Hz]
+const T0 = 0.37;          // sfasamento iniziale del tempo: a t = 0 l'onda stazionaria sarebbe piatta
+const YMAX = 2.25;        // scala verticale fissa (|y| <= 2A con A <= 1): l'ampiezza si vede cambiare
+
+const cv = Doll.canvas(), ctx = cv.ctx;
+let modo = "prog", tAnim = 0;
+const par = { A: 1, f: 0.5, v: 1.5, df: 0.25, tipo: "gamma", gm: 1, gf: 180, r: 0, xl: 0 };
+const P = { x: 2.2, z: -0.6 };      // punto di osservazione: x [m] (corda) oppure z/lambda (linea)
+const tt = () => tAnim + T0;
+
+// ---------- fisica ----------
+function gamma() {                   // [Re, Im] del coefficiente di riflessione al carico
+  if (par.tipo === "gamma") { const a = par.gf * Math.PI / 180; return [par.gm * Math.cos(a), par.gm * Math.sin(a)]; }
+  const nr = par.r - 1, dr = par.r + 1, x = par.xl, d = dr * dr + x * x;   // (z-1)/(z+1), z = r + jx
+  return [(nr * dr + x * x) / d, (x * dr - nr * x) / d];
+}
+function zCarico() {                 // z_L = (1+Gamma)/(1-Gamma), null se Gamma = 1 (circuito aperto)
+  const [gr, gi] = gamma(), dr = 1 - gr, di = -gi, d = dr * dr + di * di;
+  if (d < 1e-9) return null;
+  const nr = 1 + gr, ni = gi; return [(nr * dr + ni * di) / d, (ni * dr - nr * di) / d];
+}
+// linea: z in lunghezze d'onda (z <= 0), beta z = 2 pi z, fasori con e^{j w t}
+function linea(z, t) {
+  const [gr, gi] = gamma(), gm = Math.hypot(gr, gi), gf = Math.atan2(gi, gr), w = 2 * Math.PI * F_LINEA, bz = 2 * Math.PI * z;
+  const inc = par.A * Math.cos(w * t - bz), rif = par.A * gm * Math.cos(w * t + bz + gf);
+  const env = par.A * Math.hypot(1 + gr * Math.cos(2 * bz) - gi * Math.sin(2 * bz), gr * Math.sin(2 * bz) + gi * Math.cos(2 * bz));
+  return { inc, rif, tot: inc + rif, env };
+}
+const k1 = () => 2 * Math.PI * par.f / par.v, w1 = () => 2 * Math.PI * par.f;
+const k2 = () => 2 * Math.PI * (par.f + par.df) / par.v, w2 = () => 2 * Math.PI * (par.f + par.df);
+// onda(x, t): la grandezza mostrata nella situazione corrente
+function onda(x, t) {
+  if (modo === "prog") return par.A * Math.sin(k1() * x - w1() * t);
+  if (modo === "batt") return par.A * Math.sin(k1() * x - w1() * t) + par.A * Math.sin(k2() * x - w2() * t);
+  return linea(x, t).tot;
+}
+// inviluppo dei battimenti: 2A |cos((dk x - dw t)/2)|
+const invBatt = (x, t) => 2 * par.A * Math.abs(Math.cos(((k2() - k1()) * x - (w2() - w1()) * t) / 2));
+
+// ---------- grafica: riquadri con assi ----------
+function riquadro(x0, y0, w, h, xa, xb, ya, yb) {
+  return { x0, y0, w, h, xa, xb, ya, yb, X: x => x0 + (x - xa) / (xb - xa) * w, Y: y => y0 + (yb - y) / (yb - ya) * h };
+}
+function assi(R, o) {                // o: {xt:[...], xl: fmt, yt:[...], titoloX, titoloY, titolo}
+  ctx.lineWidth = 1; ctx.strokeStyle = "#eeece6";
+  ctx.beginPath();
+  for (const x of o.xt) { ctx.moveTo(R.X(x), R.y0); ctx.lineTo(R.X(x), R.y0 + R.h); }
+  for (const y of o.yt) { ctx.moveTo(R.x0, R.Y(y)); ctx.lineTo(R.x0 + R.w, R.Y(y)); }
+  ctx.stroke();
+  ctx.strokeStyle = "#b9b7b0"; ctx.beginPath(); ctx.moveTo(R.x0, R.Y(0)); ctx.lineTo(R.x0 + R.w, R.Y(0));
+  ctx.moveTo(R.x0, R.y0); ctx.lineTo(R.x0, R.y0 + R.h); ctx.stroke();
+  ctx.fillStyle = C.grigio; ctx.font = "12px sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (const x of o.xt) ctx.fillText(o.xl(x), R.X(x), R.y0 + R.h + 4);
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const y of o.yt) ctx.fillText(virgola(String(y)), R.x0 - 6, R.Y(y));
+  ctx.textAlign = "right"; ctx.textBaseline = "top"; ctx.fillText(o.titoloX, R.x0 + R.w, R.y0 + R.h + 19);
+  ctx.save(); ctx.translate(R.x0 - 36, R.y0 + R.h / 2); ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(o.titoloY, 0, 0); ctx.restore();
+  ctx.fillStyle = C.testo; ctx.font = "600 13px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+  ctx.fillText(o.titolo, R.x0, R.y0 - 6);
+}
+function curva(R, f, colore, sp, tratt, n = 700) {
+  ctx.strokeStyle = colore; ctx.lineWidth = sp; ctx.setLineDash(tratt || []);
+  ctx.beginPath();
+  for (let i = 0; i <= n; i++) { const x = R.xa + (R.xb - R.xa) * i / n, y = Math.max(R.ya, Math.min(R.yb, f(x)));
+    i ? ctx.lineTo(R.X(x), R.Y(y)) : ctx.moveTo(R.X(x), R.Y(y)); }
+  ctx.stroke(); ctx.setLineDash([]);
+}
+function punto(x, y, r, colore, pieno = true) {
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI);
+  if (pieno) { ctx.fillStyle = colore; ctx.fill(); } else { ctx.fillStyle = "#fff"; ctx.fill(); ctx.strokeStyle = colore; ctx.lineWidth = 2.5; ctx.stroke(); }
+}
+const virgola = t => String(t).replace(/\./g, ",").replace(/-/g, "−");
+const passi = (a, b, d) => { const o = []; for (let v = Math.ceil(a / d - 1e-9) * d; v <= b + 1e-9; v += d) o.push(+v.toFixed(6)); return o; };
+
+let Rs = null, Rt = null;             // riquadro sopra (forma) e sotto (tempo)
+function disegna() {
+  // su schermi stretti la legenda va a capo: si lascia piu' spazio in alto
+  const w = cv.w, h = cv.h, ml = 62, mr = modo === "rifl" ? 78 : 26, top = w < 600 ? (modo === "rifl" ? 98 : 74) : 34, hs = Math.round(h * 0.58);
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+  const unita = modo === "rifl" ? "v [V]" : "y [cm]";
+  const yt = [-2, -1, 0, 1, 2];
+
+  // --- sopra: forma dell'onda all'istante t ---
+  if (modo === "rifl") {
+    Rs = riquadro(ml, top, w - ml - mr, hs - top - 44, -NL, 0, -YMAX, YMAX);
+    assi(Rs, { xt: passi(-NL, 0, 0.25), xl: x => (Math.abs(x * 2 % 1) > 1e-9 ? "" : x === 0 ? "0" : x === -1 ? "−λ" : virgola(x) + "λ"),
+               yt, titoloX: "z (carico in z = 0)", titoloY: unita, titolo: "Tensione lungo la linea" });
+  } else {
+    Rs = riquadro(ml, top, w - ml - mr, hs - top - 44, 0, L, -YMAX, YMAX);
+    assi(Rs, { xt: passi(0, L, 0.5), xl: x => (x % 1 ? "" : virgola(x)), yt, titoloX: "x [m]", titoloY: unita,
+               titolo: modo === "prog" ? "Forma della corda all'istante t" : "Somma di due onde all'istante t" });
+  }
+  disegnaSopra(Rs);
+
+  // --- sotto: oscillazione nel punto P in funzione del tempo ---
+  const T = modo === "rifl" ? 1 / F_LINEA : 1 / par.f;
+  const W = modo === "batt" ? Math.min(20, Math.max(4, 2.5 / par.df)) : 3 * T;     // finestra [s]
+  Rt = riquadro(ml, hs + 30, w - ml - mr, h - hs - 30 - 44, -W, 0, -YMAX, YMAX);
+  const dt = W > 8 ? 2 : W > 4 ? 1 : 0.5;
+  assi(Rt, { xt: passi(-W, 0, dt), xl: x => virgola(x), yt, titoloX: "tempo [s]  (0 = adesso)", titoloY: unita,
+             titolo: "Oscillazione nel punto P nel tempo" });
+  const xo = modo === "rifl" ? P.z : P.x;
+  if (modo === "rifl") { const e = linea(xo, 0).env; curva(Rt, () => e, C.grigio, 1.3, [6, 4], 2); curva(Rt, () => -e, C.grigio, 1.3, [6, 4], 2); }
+  if (modo === "batt") { curva(Rt, s => invBatt(xo, tt() + s), C.arancio, 1.3, [6, 4], 400); curva(Rt, s => -invBatt(xo, tt() + s), C.arancio, 1.3, [6, 4], 400); }
+  curva(Rt, s => onda(xo, tt() + s), C.verde, 2.2, null, 1500);
+  punto(Rt.X(0), Rt.Y(onda(xo, tt())), 6, C.verde);
+}
+
+function disegnaSopra(R) {
+  const t = tt(), xo = modo === "rifl" ? P.z : P.x;
+  // guida verticale del punto P (trascinabile)
+  ctx.strokeStyle = "rgba(47,133,90,.35)"; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(R.X(xo), R.y0); ctx.lineTo(R.X(xo), R.y0 + R.h); ctx.stroke(); ctx.setLineDash([]);
+
+  if (modo === "prog") {
+    curva(R, x => onda(x, t), C.blu, 2.8);
+    // creste: kx - wt = pi/2 + 2 pi n  -> si muovono tutte a velocita' v verso destra
+    const lam = par.v / par.f, x0 = ((Math.PI / 2 + w1() * t) / k1()) % lam;
+    for (let x = x0; x <= L + 1e-9; x += lam) punto(R.X(x), R.Y(par.A), 5, C.arancio);
+    const xc = x0 + lam * Math.floor((L / 2 - x0) / lam);
+    ctx.fillStyle = C.arancio; ctx.font = "13px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+    ctx.fillText("cresta → v", R.X(xc), R.Y(par.A) - 9);
+  } else if (modo === "batt") {
+    curva(R, x => par.A * Math.sin(k1() * x - w1() * t), "rgba(43,108,176,.28)", 1.2);
+    curva(R, x => par.A * Math.sin(k2() * x - w2() * t), "rgba(107,70,193,.28)", 1.2);
+    curva(R, x => invBatt(x, t), C.arancio, 1.4, [6, 4]); curva(R, x => -invBatt(x, t), C.arancio, 1.4, [6, 4]);
+    curva(R, x => onda(x, t), C.blu, 2.6, null, 1200);
+  } else {
+    const [gr, gi] = gamma(), gm = Math.hypot(gr, gi);
+    curva(R, z => linea(z, 0).env, C.grigio, 1.4, [6, 4]); curva(R, z => -linea(z, 0).env, C.grigio, 1.4, [6, 4]);
+    if (mostraComp) { curva(R, z => linea(z, t).inc, "rgba(43,108,176,.75)", 1.5); if (gm > 1e-3) curva(R, z => linea(z, t).rif, "rgba(221,107,32,.8)", 1.5); }
+    curva(R, z => linea(z, t).tot, C.testo, 2.8);
+    // minimi dell'inviluppo (nodi se |Gamma| = 1)
+    if (gm > 0.02) for (let d = dMin(); d <= NL + 1e-9; d += 0.5) punto(R.X(-d), R.Y(0), 4.5, C.rosso);
+    // carico a destra
+    const xL = R.X(0), yc = R.Y(0);
+    ctx.strokeStyle = C.testo; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(xL, yc); ctx.lineTo(xL + 22, yc); ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.fillRect(xL + 22, yc - 22, 44, 44); ctx.strokeRect(xL + 22, yc - 22, 44, 44);
+    ctx.fillStyle = C.testo; ctx.font = "italic 16px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("Z", xL + 41, yc); ctx.font = "11px sans-serif"; ctx.fillText("L", xL + 50, yc + 6);
+    ctx.font = "12px sans-serif"; ctx.fillStyle = C.grigio; ctx.fillText("carico", xL + 44, yc + 36);
+    ctx.textAlign = "left"; ctx.fillText("← dal generatore", R.x0 + 6, R.y0 + 12);
+  }
+  // punto P sulla corda / linea
+  punto(R.X(xo), R.Y(onda(xo, t)), 7, C.verde, false);
+  ctx.fillStyle = C.verde; ctx.font = "bold 14px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+  ctx.fillText("P", R.X(xo) + 6, R.y0 + R.h - 3);
+}
+// distanza (in lambda) dal carico del primo minimo / massimo dell'inviluppo
+function dMin() { const [gr, gi] = gamma(), f = Math.atan2(gi, gr); return (((f - Math.PI) / (4 * Math.PI)) % 0.5 + 0.5) % 0.5; }
+function dMax() { const [gr, gi] = gamma(), f = Math.atan2(gi, gr); return ((f / (4 * Math.PI)) % 0.5 + 0.5) % 0.5; }
+
+// ---------- letture, formule e legenda per situazione ----------
+const fmt = (v, d = 2) => virgola(v.toFixed(d));
+function aggiornaTesti() {
+  const F = document.getElementById("formule"), G = document.getElementById("legenda");
+  const leg = (c, t, tr) => `<i ${tr ? 'class="tratto" style="border-color:' + c + '"' : 'style="background:' + c + '"'}></i>${t} &nbsp; `;
+  if (modo === "prog") {
+    F.innerHTML = "$y(x,t)=A\\sin(kx-\\omega t)\\qquad v=\\lambda f=\\dfrac{\\omega}{k}$";
+    G.innerHTML = leg(C.blu, "corda") + leg(C.arancio, "creste") + leg(C.verde, "punto P");
+  } else if (modo === "batt") {
+    F.innerHTML = "$y=A\\sin(k_1x-\\omega_1t)+A\\sin(k_2x-\\omega_2t)\\qquad f_b=|f_2-f_1|$";
+    G.innerHTML = leg(C.blu, "somma") + leg(C.arancio, "inviluppo", 1) + leg(C.verde, "punto P");
+  } else {
+    F.innerHTML = "$\\Gamma=\\dfrac{Z_L-Z_0}{Z_L+Z_0}\\qquad |V(z)|=A\\,|1+\\Gamma e^{2j\\beta z}|\\qquad \\mathrm{ROS}=\\dfrac{1+|\\Gamma|}{1-|\\Gamma|}$";
+    G.innerHTML = leg(C.testo, "totale") + (mostraComp ? leg(C.blu, "incidente") + leg(C.arancio, "riflessa") : "") + leg(C.grigio, "$\\pm|V(z)|$", 1) + leg(C.rosso, "minimi");
+  }
+  Doll.tex(F); Doll.tex(G);
+}
+function aggiornaLetture() {
+  if (modo === "prog") {
+    const lam = par.v / par.f;
+    l1.set("$\\lambda = v/f$", fmt(lam) + " m"); l2.set("$T = 1/f$", fmt(1 / par.f) + " s");
+    l3.set("$k = 2\\pi/\\lambda$", fmt(k1()) + " rad/m"); l4.set("$\\omega = 2\\pi f$", fmt(w1()) + " rad/s");
+  } else if (modo === "batt") {
+    l1.set("$f_1,\\ f_2$", fmt(par.f) + " Hz, " + fmt(par.f + par.df) + " Hz");
+    l2.set("$f_b = |f_2-f_1|$", fmt(par.df) + " Hz"); l3.set("$T_b = 1/f_b$", fmt(1 / par.df) + " s");
+    l4.set("lobo nello spazio $v/f_b$", fmt(par.v / par.df) + " m");
+  } else {
+    const [gr, gi] = gamma(), gm = Math.hypot(gr, gi), gf = Math.atan2(gi, gr) * 180 / Math.PI, z = zCarico();
+    l1.set("$\\Gamma$", gm < 1e-3 ? "0" : `${fmt(gm)} ∠ ${virgola(Math.round(gf))}°`);
+    l2.set("ROS (VSWR)", gm > 0.999 ? "∞" : fmt((1 + gm) / (1 - gm)));
+    // controllo numerico: max/min dell'inviluppo campionato sul tratto mostrato
+    let mx = 0, mn = Infinity; for (let i = 0; i <= 2000; i++) { const e = linea(-NL * i / 2000, 0).env; mx = Math.max(mx, e); mn = Math.min(mn, e); }
+    l3.set("$V_{max}/V_{min}$ dal grafico", mn < 1e-3 * mx ? "∞" : fmt(mx / mn));
+    l4.set("$z_L = Z_L/Z_0$", z === null ? "∞ (aperto)" : `${fmt(z[0])} ${z[1] < 0 ? "−" : "+"} j${fmt(Math.abs(z[1]))}`);
+    l5.set("primo minimo dal carico", gm < 0.02 ? "—" : fmt(dMin(), 3) + " λ");
+  }
+}
+function richiedi() { if (richiedi.c) return; richiedi.c = true; requestAnimationFrame(() => { richiedi.c = false; disegna(); }); }
+window.addEventListener("resize", richiedi);
+// la vista cambia misura anche senza resize della finestra (formule in alto piu' alte): Doll.canvas la svuota, si ridisegna
+new ResizeObserver(richiedi).observe(document.getElementById("vista"));
+
+// ---------- trascinamento di P (sopra o sotto, conta solo x) ----------
+let trascina = false;
+const posX = e => e.clientX - cv.c.getBoundingClientRect().left;
+function muoviP(px) {
+  if (!Rs) return;
+  const u = Rs.xa + (Math.max(Rs.x0, Math.min(Rs.x0 + Rs.w, px)) - Rs.x0) / Rs.w * (Rs.xb - Rs.xa);
+  if (modo === "rifl") P.z = u; else P.x = u; richiedi();
+}
+cv.c.addEventListener("pointerdown", e => {
+  const xo = modo === "rifl" ? P.z : P.x;
+  if (Rs && Math.abs(posX(e) - Rs.X(xo)) < 16) { trascina = true; cv.c.setPointerCapture(e.pointerId); }
+});
+cv.c.addEventListener("pointermove", e => {
+  if (trascina) return muoviP(posX(e));
+  const xo = modo === "rifl" ? P.z : P.x;
+  cv.c.style.cursor = Rs && Math.abs(posX(e) - Rs.X(xo)) < 16 ? "ew-resize" : "default";
+});
+cv.c.addEventListener("pointerup", () => (trascina = false));
+
+// ---------- pannello ----------
+const pan = document.getElementById("pannello");
+const gruppo = () => { const d = document.createElement("div"); d.style.cssText = "display:flex;flex-direction:column;gap:14px"; pan.appendChild(d); return d; };
+let mostraComp = true;
+
+Doll.titoletto(null, "Situazione");
+const sModo = Doll.scelta(null, { value: "prog", opzioni: [["prog", "onda progressiva (corda)"], ["rifl", "riflessione su un carico (linea)"], ["batt", "battimenti (due onde)"]],
+  onChange: v => { modo = v; mostraGruppi(); aggiornaTesti(); aggiornaLetture(); richiedi(); } });
+const anim = Doll.animazione((dt, t) => { tAnim = t; disegna(); });
+
+Doll.titoletto(null, "Parametri");
+const gTutti = gruppo();
+const sA = Doll.slider(gTutti, { label: "ampiezza $A$", min: 0.1, max: 1, step: 0.05, value: par.A, fmt: v => fmt(v), onInput: v => { par.A = v; aggiornaLetture(); richiedi(); } });
+const gCorda = gruppo();
+const sF = Doll.slider(gCorda, { label: "frequenza $f$", min: 0.1, max: 2.5, step: 0.05, value: par.f, fmt: v => fmt(v) + " Hz",
+  onInput: v => { par.f = v; aggiornaLetture(); richiedi(); } });
+const sV = Doll.slider(gCorda, { label: "velocità $v$", min: 0.5, max: 3, step: 0.1, value: par.v, fmt: v => fmt(v, 1) + " m/s",
+  onInput: v => { par.v = v; aggiornaLetture(); richiedi(); } });
+const gBatt = gruppo();
+const sDF = Doll.slider(gBatt, { label: "differenza $f_2-f_1$", min: 0.05, max: 1, step: 0.05, value: par.df, fmt: v => fmt(v) + " Hz",
+  onInput: v => { par.df = v; aggiornaLetture(); richiedi(); } });
+const gRifl = gruppo();
+const sTipo = Doll.scelta(gRifl, { label: "carico dato come", value: "gamma", opzioni: [["gamma", "Γ: modulo e fase"], ["z", "impedenza normalizzata r + jx"]],
+  onChange: v => cambiaTipo(v) });
+const gGam = gruppo(); gRifl.appendChild(gGam);
+const sGm = Doll.slider(gGam, { label: "$|\\Gamma|$", min: 0, max: 1, step: 0.01, value: par.gm, fmt: v => fmt(v), onInput: v => { par.gm = v; aggiornaLetture(); richiedi(); } });
+const sGf = Doll.slider(gGam, { label: "fase di $\\Gamma$", min: -180, max: 180, step: 5, value: par.gf, fmt: v => virgola(v) + "°",
+  onInput: v => { par.gf = v; aggiornaLetture(); richiedi(); } });
+const gZ = gruppo(); gRifl.appendChild(gZ);
+const sR = Doll.slider(gZ, { label: "$r = R_L/Z_0$", min: 0, max: 5, step: 0.05, value: par.r, fmt: v => fmt(v), onInput: v => { par.r = v; aggiornaLetture(); richiedi(); } });
+const sX = Doll.slider(gZ, { label: "$x = X_L/Z_0$", min: -3, max: 3, step: 0.05, value: par.xl, fmt: v => fmt(v), onInput: v => { par.xl = v; aggiornaLetture(); richiedi(); } });
+const bComp = Doll.bottone(gRifl, "Nascondi incidente e riflessa", () => { mostraComp = !mostraComp;
+  bComp.textContent = mostraComp ? "Nascondi incidente e riflessa" : "Mostra incidente e riflessa"; aggiornaTesti(); richiedi(); });
+
+Doll.titoletto(null, "Letture");
+// letture con etichetta variabile: la riga intera viene riscritta per situazione
+function letturaVar() {
+  const set = Doll.lettura(null, ""), el = pan.lastElementChild;
+  return { set: (et, val) => { el.style.display = ""; el.firstChild.innerHTML = et; Doll.tex(el.firstChild); set(val); }, el };
+}
+const l1 = letturaVar(), l2 = letturaVar(), l3 = letturaVar(), l4 = letturaVar(), l5 = letturaVar();
+const nota = document.createElement("p"); nota.className = "doll-nota"; pan.appendChild(nota);
+
+// passaggio Gamma <-> z_L mantenendo lo stesso carico
+function cambiaTipo(v) {
+  const [gr, gi] = gamma();
+  if (v === "z") { const z = zCarico(); par.tipo = "z"; sR.set(z ? Math.min(5, Math.max(0, z[0])) : 5); sX.set(z ? Math.min(3, Math.max(-3, z[1])) : 0); }
+  else { par.tipo = "gamma"; sGm.set(Math.min(1, Math.hypot(gr, gi))); sGf.set(Math.round(Math.atan2(gi, gr) * 180 / Math.PI / 5) * 5); }
+  sTipo.el.value = v; mostraGruppi(); aggiornaLetture(); richiedi();
+}
+function mostraGruppi() {
+  gCorda.style.display = modo === "rifl" ? "none" : ""; gBatt.style.display = modo === "batt" ? "" : "none";
+  gRifl.style.display = modo === "rifl" ? "" : "none";
+  gGam.style.display = par.tipo === "gamma" ? "" : "none"; gZ.style.display = par.tipo === "z" ? "" : "none";
+  l5.el.style.display = modo === "rifl" ? "" : "none";
+  sF.el.parentElement.querySelector("span").innerHTML = modo === "batt" ? "frequenza $f_1$" : "frequenza $f$";
+  Doll.tex(sF.el.parentElement);
+  nota.textContent = modo === "rifl"
+    ? "Tempo rallentato. Trascina P lungo la linea: in un minimo l'oscillazione è più piccola."
+    : "Trascina il punto verde P: in basso vedi come oscilla nel tempo.";
+}
+
+// ---------- percorso guidato ----------
+// "Prova tu": ROS = (1+|Gamma|)/(1-|Gamma|) = 2  ->  |Gamma| = 1/3; con carico resistivo z_L = r, Gamma = (r-1)/(r+1)
+// -> r = 2 oppure r = 1/2 (SymPy). Accettato |ROS - 2| < 0,055: slider r (passo 0,05) su 1,95 - 2 - 2,05 oppure 0,5;
+// slider |Gamma| (passo 0,01) su 0,33 o 0,34. Vale per qualunque carico, anche con reattanza: conta il ROS.
+const ros = () => { const gm = Math.hypot(...gamma()); return gm > 0.999 ? Infinity : (1 + gm) / (1 - gm); };
+const compito = Doll.bersaglio(null, { testo: "regola il carico finché ROS $=2$", ok: "ROS $=2$: $|\\Gamma|=1/3$, $R_L=2Z_0$ oppure $Z_0/2$",
+  verifica: () => modo === "rifl" && Math.abs(ros() - 2) < 0.055 });
+pan.prepend(compito.el);                                        // in cima al pannello, ben visibile
+function vai(m, o, prova = false) {
+  Object.assign(par, o); modo = m; sModo.el.value = m;
+  sA.set(par.A); sF.set(par.f); sV.set(par.v); sDF.set(par.df);
+  if (o.tipo) { sTipo.el.value = o.tipo; } sGm.set(par.gm); sGf.set(par.gf); sR.set(par.r); sX.set(par.xl);
+  compito.mostra(prova);
+  mostraGruppi(); aggiornaTesti(); aggiornaLetture(); richiedi();
+}
+Doll.guida([
+  { testo: "Onda progressiva: la forma trasla, ogni punto oscilla sul posto",
+    applica: () => { P.x = 2.2; vai("prog", { A: 0.8, f: 0.5, v: 1.5 }); } },
+  // prevedi: si mostra il carico adattato (|V| costante); la risposta (il corto) arriva al passo dopo
+  { testo: "Adattato: $|V|$ costante. In corto ($\\Gamma=-1$) resta costante? Prevedi",
+    applica: () => { P.z = -0.6; vai("rifl", { A: 1, tipo: "z", r: 1, xl: 0 }); } },
+  { testo: "No: onda stazionaria, nodi ogni $\\lambda/2$ a partire dal carico",
+    applica: () => { P.z = -0.75; vai("rifl", { A: 1, tipo: "gamma", gm: 1, gf: 180 }); } },
+  { testo: "$R_L=3Z_0$: $|\\Gamma|=0{,}5$, riflessione parziale, ROS $=3$",
+    applica: () => { P.z = -0.25; vai("rifl", { A: 1, tipo: "z", r: 3, xl: 0 }); } },
+  { testo: "Frequenze vicine: l'ampiezza pulsa a $f_b=|f_2-f_1|$",
+    applica: () => { P.x = 1.5; vai("batt", { A: 0.8, f: 2, df: 0.5, v: 1.5 }); } },
+  { testo: "Prova tu: regola $r=R_L/Z_0$ per avere ROS $=2$",
+    applica: () => { P.z = -0.6; vai("rifl", { A: 1, tipo: "z", r: 1, xl: 0 }, true); } },
+]);
+Doll.pronto();
+</script>
+</body>
+</html>

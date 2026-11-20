@@ -1,0 +1,417 @@
+<!doctype html>
+<!--
+TEMPLATE WEB: scena 3D generica (three.js) con OrbitControls, assi etichettati (CSS2DRenderer),
+oggetti ricostruiti quando cambia un parametro.
+Esempio: reticoli cristallini (Fisica dello stato solido): cubico semplice, corpo centrato,
+facce centrate, diamante; cella convenzionale con atomi e legami ai primi vicini, numero di
+coordinazione, fattore di impaccamento, piano di Miller (h k l) tagliato sulla cella, cella ripetuta N×N×N.
+
+Struttura del codice (riusala):
+  1. SCENA      renderer WebGL + CSS2DRenderer sovrapposto, camera, luci, OrbitControls, resize, loop;
+  2. HELPER 3D  sfere e cilindri ISTANZIATI (InstancedMesh: migliaia di oggetti a 60 fps),
+                freccia3d(), etichetta() (testo HTML che segue un punto 3D), poligonoPiano();
+  3. MODELLO    dati del problema (qui i reticoli) e calcoli verificati (z, impaccamento);
+  3. COSTRUISCI ricostruisce il gruppo `mondo` da zero a ogni cambio di parametro (semplice e robusto);
+  4. PANNELLO   + Doll.guida: prevedi -> osserva -> spiega (passo 2 chiede i primi vicini del bcc,
+                il 3 li mostra), ultimo passo "Prova tu" con Doll.bersaglio (piano con d = a/√5).
+Coordinate: si usa direttamente il sistema del libro (x, y, z) con z verso l'ALTO (camera.up = z).
+
+Idee per esercizi simili:
+  - vettori, rette e piani in R^3 (Algebra lineare): freccia3d() per i vettori, poligonoPiano()
+    per il piano n·x = d tagliato su un cubo, prodotto vettoriale, proiezioni, span di due vettori;
+  - onda elettromagnetica piana: E (lungo x) e B (lungo y) come frecce istanziate lungo z che oscillano
+    in fase, aggiornate in loop(); slider lambda e polarizzazione (lineare/circolare);
+  - geometria molecolare (VSEPR, CH4 tetraedrico, angoli 109,5°): stessi atomi + legami; per molecole
+    da file PDB esiste anche la libreria 3dmol;
+  - corpo rigido: un parallelepipedo che ruota con omega(t), vettore L e omega (non paralleli se il
+    tensore d'inerzia non e' diagonale), ellissoide d'inerzia;
+  - reticolo reciproco e zona di Brillouin: vettori b_i = 2pi (a_j × a_k)/V, la prima zona come
+    poliedro (ConvexGeometry non e' nel bundle: costruisci le facce a mano o usa i piani bisettori
+    con poligonoPiano() tagliati da un cubo), punti Gamma, X, L etichettati;
+  - campi vettoriali in 3D (rotore, divergenza): griglia di frecce istanziate.
+Regole: titolo breve, dati in .doll-dati, didascalie <= ~12 parole, Doll.guida, Doll.pronto() alla fine.
+Build:  .venv/bin/python .claude/skills/spiega/scripts/web_build.py pagina.html
+Check:  .venv/bin/python .claude/skills/spiega/scripts/web_check.py interattivo.html
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reticoli cristallini</title>
+<!-- doll:lib three -->
+<style>
+  #vista canvas { position: absolute; inset: 0; }
+  #etichette { position: absolute; inset: 0; pointer-events: none; }
+  .lab3d { font: 600 15px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+           color: #1d1d1f; padding: 2px 4px; white-space: nowrap; }
+  .lab3d.piano { color: #6b46c1; background: rgba(255,255,255,.8); border-radius: 5px; }
+  .lab3d.tenue { color: #6b6b70; font-weight: 500; font-style: italic; }
+  .doll-legenda i.pallino { width: 11px; height: 11px; border-radius: 50%; }
+  .doll-legenda div { margin: 2px 0; }
+  .doll-pannello .doll-riga-hkl { display: flex; gap: 10px; }
+  .doll-pannello .doll-riga-hkl .doll-ctrl { flex: 1; min-width: 0; }
+  /* pannello piu' compatto: qui ci sono molti controlli */
+  .doll-pannello { gap: 9px; }
+  .doll-pannello .doll-lettura { padding: 3px 0; font-size: 13.5px; }
+  #bVista { position: absolute; right: 12px; bottom: 12px; font-size: 13px; padding: 5px 10px; }
+  @media (max-width: 820px) { html, body { height: auto; } }   /* su telefono la pagina scorre */
+</style>
+</head>
+<body>
+<header class="doll-top">
+  <h1>Reticoli cristallini</h1>
+  <div class="doll-dati" id="dati">cella cubica di lato $a$</div>
+</header>
+<main class="doll-main">
+  <section class="doll-vista" id="vista">
+    <div id="etichette"></div>
+    <div class="doll-legenda" id="legenda"></div>
+    <button class="doll-btn" id="bVista">Vista iniziale</button>
+  </section>
+  <aside class="doll-pannello" id="pannello"></aside>
+</main>
+<footer class="doll-didascalia" id="didascalia"></footer>
+
+<script>
+const C = Doll.col;
+const vista = document.getElementById("vista");
+
+/* ============================ 1. SCENA ============================ */
+// preserveDrawingBuffer: serve al controllo automatico (screenshot del canvas WebGL)
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setClearColor(0xffffff, 1);
+vista.prepend(renderer.domElement);
+
+const etichetteEl = document.getElementById("etichette");
+const labelRenderer = new THREE.CSS2DRenderer({ element: etichetteEl });
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 200);
+camera.up.set(0, 0, 1);                                   // z verso l'alto, come sul libro
+scene.add(new THREE.HemisphereLight(0xffffff, 0xd8d4c8, 1.6));
+const sole = new THREE.DirectionalLight(0xffffff, 1.7); sole.position.set(4, 2, 7); scene.add(sole);
+const riempi = new THREE.DirectionalLight(0xffffff, 0.5); riempi.position.set(-3, -5, 1); scene.add(riempi);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.12;
+
+function adatta() {
+  const w = vista.clientWidth, h = vista.clientHeight;
+  renderer.setSize(w, h); labelRenderer.setSize(w, h);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+// ResizeObserver (non solo window.resize): la vista cambia misura anche quando il layout si assesta
+// (KaTeX nell'intestazione, pannello in colonna su telefono)
+new ResizeObserver(adatta).observe(vista); adatta();
+
+// direzione di vista "da libro": x verso l'osservatore in basso a sinistra, y a destra, z in alto
+const DIR_VISTA = new THREE.Vector3(3.0, 1.25, 1.55).normalize();
+function inquadra(N, dir = DIR_VISTA) {
+  const c = new THREE.Vector3(N / 2, N / 2, N / 2);
+  const dist = (1.05 * N * Math.sqrt(3) / 2 + 0.5) / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2))
+             / Math.min(1, camera.aspect);
+  controls.target.copy(c); camera.position.copy(c).addScaledVector(dir, dist); controls.update();
+}
+
+(function loop() {                                        // loop continuo: serve al damping dei controlli
+  requestAnimationFrame(loop); controls.update();
+  renderer.render(scene, camera); labelRenderer.render(scene, camera);
+})();
+
+/* ============================ 2. HELPER 3D ============================ */
+const GEO_SFERA = new THREE.SphereGeometry(1, 32, 20);
+const GEO_CIL = new THREE.CylinderGeometry(1, 1, 1, 14, 1); // asse lungo y, altezza 1, centrato
+const SU = new THREE.Vector3(0, 1, 0);
+const tmpM = new THREE.Matrix4(), tmpQ = new THREE.Quaternion(), tmpV = new THREE.Vector3(), tmpS = new THREE.Vector3();
+
+// sfere istanziate: punti [{p:[x,y,z], r, col}]
+function sfereIstanziate(punti, materiale) {
+  const m = new THREE.InstancedMesh(GEO_SFERA, materiale, Math.max(punti.length, 1));
+  m.count = punti.length;
+  punti.forEach((s, i) => {
+    tmpM.compose(tmpV.set(...s.p), tmpQ.identity(), tmpS.set(s.r, s.r, s.r));
+    m.setMatrixAt(i, tmpM); m.setColorAt(i, new THREE.Color(s.col));
+  });
+  return m;
+}
+// cilindri istanziati tra coppie di punti: segmenti [[a, b], ...], raggio r
+function cilindriIstanziati(segmenti, r, materiale) {
+  const m = new THREE.InstancedMesh(GEO_CIL, materiale, Math.max(segmenti.length, 1));
+  m.count = segmenti.length;
+  const A = new THREE.Vector3(), B = new THREE.Vector3(), D = new THREE.Vector3();
+  segmenti.forEach(([a, b], i) => {
+    A.set(...a); B.set(...b); D.subVectors(B, A); const L = D.length();
+    tmpQ.setFromUnitVectors(SU, D.normalize());
+    tmpM.compose(tmpV.addVectors(A, B).multiplyScalar(0.5), tmpQ, tmpS.set(r, L, r));
+    m.setMatrixAt(i, tmpM);
+  });
+  return m;
+}
+// freccia 3D (cilindro + cono), da o lungo dir per lunghezza L
+function freccia3d(o, dir, L, colore, r = 0.018) {
+  const g = new THREE.Group(), mat = new THREE.MeshStandardMaterial({ color: colore, roughness: 0.6 });
+  const d = new THREE.Vector3(...dir).normalize(), punta = Math.min(0.22, L * 0.3);
+  const asta = new THREE.Mesh(GEO_CIL, mat); asta.scale.set(r, L - punta, r);
+  asta.position.copy(new THREE.Vector3(...o).addScaledVector(d, (L - punta) / 2));
+  asta.quaternion.setFromUnitVectors(SU, d);
+  const cono = new THREE.Mesh(new THREE.ConeGeometry(r * 3.2, punta, 16), mat);
+  cono.position.copy(new THREE.Vector3(...o).addScaledVector(d, L - punta / 2));
+  cono.quaternion.setFromUnitVectors(SU, d);
+  g.add(asta, cono); return g;
+}
+// etichetta HTML ancorata a un punto 3D (accetta testo semplice; classi: "", "piano", "tenue")
+function etichetta(testo, p, classe = "") {
+  const div = document.createElement("div"); div.className = "lab3d " + classe; div.textContent = testo;
+  const o = new THREE.CSS2DObject(div); o.position.set(...p); return o;
+}
+// poligono del piano n·x = d dentro il cubo [0,L]^3 (vertici ordinati), [] se non lo taglia
+function poligonoPiano(n, d, L) {
+  const V = []; const eps = 1e-9;
+  for (let ax = 0; ax < 3; ax++) {                         // 12 spigoli: paralleli all'asse ax
+    const [u, v] = [0, 1, 2].filter(k => k !== ax);
+    for (const pu of [0, L]) for (const pv of [0, L]) {
+      const p = [0, 0, 0]; p[u] = pu; p[v] = pv;
+      if (Math.abs(n[ax]) < eps) {                         // spigolo parallelo al piano: giace sul piano?
+        if (Math.abs(n[u] * pu + n[v] * pv - d) < eps) { V.push([...p].map((c, k) => k === ax ? 0 : c), [...p].map((c, k) => k === ax ? L : c)); }
+        continue;
+      }
+      const t = (d - n[u] * pu - n[v] * pv) / n[ax];
+      if (t >= -eps && t <= L + eps) { p[ax] = Math.min(L, Math.max(0, t)); V.push(p); }
+    }
+  }
+  const uniq = []; for (const p of V) if (!uniq.some(q => Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]) < 1e-7)) uniq.push(p);
+  if (uniq.length < 3) return [];
+  // ordina per angolo attorno al baricentro, in una base (e1, e2) del piano
+  const c = [0, 1, 2].map(k => uniq.reduce((s, p) => s + p[k], 0) / uniq.length);
+  const nn = new THREE.Vector3(...n).normalize();
+  const e1 = new THREE.Vector3(...uniq[0]).sub(new THREE.Vector3(...c)).normalize(), e2 = new THREE.Vector3().crossVectors(nn, e1);
+  return uniq.map(p => { const w = new THREE.Vector3(...p).sub(new THREE.Vector3(...c)); return { p, a: Math.atan2(w.dot(e2), w.dot(e1)) }; })
+             .sort((A, B) => A.a - B.a).map(o => o.p);
+}
+function meshPoligono(vertici, colore, opacita) {
+  const g = new THREE.Group();
+  const pos = []; for (let i = 1; i < vertici.length - 1; i++) pos.push(...vertici[0], ...vertici[i], ...vertici[i + 1]);
+  const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  const faccia = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: colore, transparent: true, opacity: opacita,
+    side: THREE.DoubleSide, depthWrite: false }));
+  faccia.renderOrder = 2;
+  const bordo = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(vertici.map(p => new THREE.Vector3(...p))),
+    new THREE.LineBasicMaterial({ color: colore }));
+  g.add(faccia, bordo); return g;
+}
+
+/* ============================ 3. MODELLO: reticoli ============================ */
+const FCC = [[0, 0, 0], [0.5, 0.5, 0], [0.5, 0, 0.5], [0, 0.5, 0.5]];
+// base nella cella convenzionale (coordinate in unita' di a) e valori esatti da mostrare
+const RETICOLI = {
+  sc:       { nome: "cubico semplice",      base: [[0, 0, 0]],                                   dTeX: "a",                    fTeX: "\\pi/6" },
+  bcc:      { nome: "cubico a corpo centrato", base: [[0, 0, 0], [0.5, 0.5, 0.5]],                 dTeX: "\\tfrac{\\sqrt3}{2}a", fTeX: "\\pi\\sqrt3/8" },
+  fcc:      { nome: "cubico a facce centrate", base: FCC,                                         dTeX: "\\tfrac{\\sqrt2}{2}a", fTeX: "\\pi\\sqrt2/6" },
+  diamante: { nome: "diamante",             base: [...FCC, ...FCC.map(p => p.map(c => c + 0.25))], dTeX: "\\tfrac{\\sqrt3}{4}a", fTeX: "\\pi\\sqrt3/16" },
+};
+const EPS = 1e-6;
+// tutti gli atomi del blocco [0,N]^3 (anche quelli su facce, spigoli e vertici)
+function atomi(base, N) {
+  const out = [];
+  for (let i = -1; i <= N; i++) for (let j = -1; j <= N; j++) for (let k = -1; k <= N; k++)
+    for (const b of base) {
+      const p = [b[0] + i, b[1] + j, b[2] + k];
+      if (p.every(c => c > -EPS && c < N + EPS)) out.push(p);
+    }
+  return out;
+}
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+// tipo di sito dalle coordinate frazionarie (serve solo per il colore)
+function tipoSito(p) {
+  const f = p.map(c => ((c % 1) + 1) % 1), zero = x => x < EPS || x > 1 - EPS, mezzo = x => Math.abs(x - 0.5) < EPS;
+  if (f.every(zero)) return "vertice";
+  if (f.every(mezzo)) return "corpo";
+  if (f.filter(mezzo).length === 2 && f.some(zero)) return "faccia";
+  return "tetra";
+}
+const COL_SITO = { vertice: C.blu, corpo: C.arancio, faccia: C.verde, tetra: C.arancio };
+const NOME_SITO = { vertice: "vertici", corpo: "centro del corpo", faccia: "centri delle facce", tetra: "siti $(\\frac14,\\frac14,\\frac14)a$" };
+
+// proprieta' calcolate NUMERICAMENTE (cosi' l'adattamento a un altro reticolo resta corretto)
+function proprieta(chiave) {
+  const R = RETICOLI[chiave], blocco = atomi(R.base, 3), o = [1, 1, 1];      // (1,1,1): sito interno al blocco 3x3x3
+  const d = blocco.map(p => dist(p, o)).filter(x => x > EPS);
+  const dnn = Math.min(...d), z = d.filter(x => Math.abs(x - dnn) < EPS).length;
+  // atomi per cella: ogni atomo della cella pesa 1/2 per ogni coordinata su una faccia (0 o 1)
+  const gruppi = {};
+  for (const p of atomi(R.base, 1)) { const w = p.reduce((s, c) => s * (c < EPS || c > 1 - EPS ? 0.5 : 1), 1); gruppi[w] = (gruppi[w] || 0) + 1; }
+  const nCella = Object.entries(gruppi).reduce((s, [w, n]) => s + w * n, 0);
+  const fr = { 0.125: "\\tfrac18", 0.25: "\\tfrac14", 0.5: "\\tfrac12", 1: "1" };
+  const formula = Object.entries(gruppi).sort((A, B) => A[0] - B[0]).map(([w, n]) => (w == 1 ? `${n}` : `${n}\\cdot${fr[w]}`)).join("+");
+  const fp = nCella * (4 / 3) * Math.PI * (dnn / 2) ** 3;                      // a = 1
+  return { dnn, z, nCella, formula, fp };
+}
+
+/* ============================ 4. COSTRUZIONE DELLA SCENA ============================ */
+const stato = { ret: "sc", modello: "legami", N: 1, h: 1, k: 1, l: 1, piani: "nessuno" };
+const matAtomi = new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.05 });
+const matTenui = new THREE.MeshStandardMaterial({ roughness: 0.35, transparent: true, opacity: 0.16, depthWrite: false });
+const matLegami = new THREE.MeshStandardMaterial({ color: 0x9a9890, roughness: 0.6 });
+const matBordo = new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.8 });
+const matGriglia = new THREE.MeshStandardMaterial({ color: 0xb9b6ac, roughness: 0.8 });
+let mondo = null;
+
+function svuota(obj) {                                    // libera la memoria GPU del gruppo precedente
+  obj.traverse(o => {
+    if (o.isInstancedMesh) o.dispose();
+    else if (o.geometry && o.geometry !== GEO_SFERA && o.geometry !== GEO_CIL) o.geometry.dispose();
+    if (o.isCSS2DObject) o.element.remove();
+  });
+  scene.remove(obj);
+}
+
+function costruisci() {
+  if (mondo) svuota(mondo);
+  mondo = new THREE.Group(); scene.add(mondo);
+  const { ret, N, h, k, l } = stato, R = RETICOLI[ret], pr = proprieta(ret);
+  const pos = atomi(R.base, N);
+
+  // piani di Miller: h x + k y + l z = m (unita' di a). "uno": m = 1 nella prima cella; "famiglia": tutti gli m nel blocco
+  const hkl = [h, k, l], conPiano = stato.piani !== "nessuno" && (h || k || l);
+  const piani = [];
+  if (conPiano) {
+    const lista = stato.piani === "uno" ? [1] : Array.from({ length: (h + k + l) * N + 1 }, (_, m) => m);
+    for (const m of lista) {
+      const L = stato.piani === "uno" ? 1 : N, poli = poligonoPiano(hkl, m, L);
+      if (poli.length >= 3) piani.push({ m, poli, L });
+    }
+  }
+  const sulPiano = p => piani.some(({ m, L }) => Math.abs(h * p[0] + k * p[1] + l * p[2] - m) < EPS && p.every(c => c < L + EPS));
+
+  // atomi: raggio "a contatto" = d_nn/2, oppure piccolo per il modello a palline e legami
+  const r = stato.modello === "contatto" ? pr.dnn / 2 : Math.min(0.11, 0.3 * pr.dnn);
+  const pieni = [], tenui = [];
+  for (const p of pos) (conPiano && !sulPiano(p) ? tenui : pieni).push({ p, r, col: COL_SITO[tipoSito(p)] });
+  mondo.add(sfereIstanziate(pieni, matAtomi));
+  if (tenui.length) { const t = sfereIstanziate(tenui, matTenui); t.renderOrder = 1; mondo.add(t); }
+
+  // legami ai primi vicini (coppie a distanza d_nn)
+  // con un piano visibile si disegnano solo i legami che giacciono nel piano (il resto confonde)
+  if (stato.modello === "legami") {
+    const seg = [];
+    for (let i = 0; i < pos.length; i++) for (let j = i + 1; j < pos.length; j++)
+      if (Math.abs(dist(pos[i], pos[j]) - pr.dnn) < EPS && (!conPiano || (sulPiano(pos[i]) && sulPiano(pos[j])
+          && Math.abs(h * pos[i][0] + k * pos[i][1] + l * pos[i][2] - (h * pos[j][0] + k * pos[j][1] + l * pos[j][2])) < EPS)))
+        seg.push([pos[i], pos[j]]);
+    mondo.add(cilindriIstanziati(seg, 0.03, matLegami));
+  }
+
+  // spigoli delle celle: bordo del blocco scuro, griglia interna chiara
+  const bordo = [], griglia = [];
+  for (let ax = 0; ax < 3; ax++) {
+    const [u, v] = [0, 1, 2].filter(q => q !== ax);
+    for (let a = 0; a <= N; a++) for (let b = 0; b <= N; b++) {
+      const p0 = [0, 0, 0]; p0[u] = a; p0[v] = b; const p1 = [...p0]; p1[ax] = N;
+      ((a === 0 || a === N) && (b === 0 || b === N) ? bordo : griglia).push([p0, p1]);
+    }
+  }
+  mondo.add(cilindriIstanziati(bordo, 0.012, matBordo));
+  if (griglia.length) mondo.add(cilindriIstanziati(griglia, 0.006, matGriglia));
+
+  // assi x, y, z dall'origine (oltre il blocco) e lato a
+  const Lax = N + 0.6;
+  [[1, 0, 0, "x"], [0, 1, 0, "y"], [0, 0, 1, "z"]].forEach(([a, b, c, nome]) => {
+    mondo.add(freccia3d([0, 0, 0], [a, b, c], Lax, 0x3a3a3c));
+    mondo.add(etichetta(nome, [a * (Lax + 0.12), b * (Lax + 0.12), c * (Lax + 0.12)]));
+  });
+  mondo.add(etichetta("a", [0.5, -0.16, -0.1], "tenue"));
+
+  // piani di Miller
+  for (const { poli } of piani) mondo.add(meshPoligono(poli, C.viola, stato.piani === "uno" ? 0.38 : 0.25));
+  if (piani.length) {
+    const P0 = piani.find(q => q.m === 1) || piani[0];
+    const c = [0, 1, 2].map(q => P0.poli.reduce((s, p) => s + p[q], 0) / P0.poli.length);
+    mondo.add(etichetta(`(${h} ${k} ${l})`, c, "piano"));
+  }
+
+  aggiornaLetture(pr, pieni.length, piani.length);
+  aggiornaLegenda(pos);
+}
+
+/* ============================ 5. PANNELLO ============================ */
+const pan = document.getElementById("pannello");
+let muto = false;                                         // true durante imposta(): niente ricostruzioni intermedie
+const ricostruisci = () => { if (!muto) costruisci(); };
+Doll.titoletto(null, "Reticolo");
+const sRet = Doll.scelta(null, { label: "struttura", value: stato.ret,
+  opzioni: [["sc", "cubico semplice (sc)"], ["bcc", "corpo centrato (bcc)"], ["fcc", "facce centrate (fcc)"], ["diamante", "diamante"]],
+  onChange: v => { stato.ret = v; costruisci(); } });
+const sMod = Doll.scelta(null, { label: "modello", value: stato.modello,
+  opzioni: [["legami", "palline e legami"], ["contatto", "sfere a contatto"]], onChange: v => { stato.modello = v; costruisci(); } });
+const sN = Doll.slider(null, { label: "celle per lato $N$", min: 1, max: 4, step: 1, value: 1,
+  onInput: v => { const cambia = v !== stato.N; stato.N = v; if (muto) return; costruisci(); if (cambia) inquadra(v); } });
+
+Doll.titoletto(null, "Piano di Miller");
+const rigaHkl = document.createElement("div"); rigaHkl.className = "doll-riga-hkl"; pan.appendChild(rigaHkl);
+const sH = Doll.slider(rigaHkl, { label: "$h$", min: 0, max: 2, step: 1, value: 1, onInput: v => { stato.h = v; ricostruisci(); } });
+const sK = Doll.slider(rigaHkl, { label: "$k$", min: 0, max: 2, step: 1, value: 1, onInput: v => { stato.k = v; ricostruisci(); } });
+const sL = Doll.slider(rigaHkl, { label: "$l$", min: 0, max: 2, step: 1, value: 1, onInput: v => { stato.l = v; ricostruisci(); } });
+const sPiani = Doll.scelta(null, { label: "mostra", value: stato.piani,
+  opzioni: [["nessuno", "nessun piano"], ["uno", "un piano (prima cella)"], ["famiglia", "tutta la famiglia"]],
+  onChange: v => { stato.piani = v; costruisci(); } });
+
+Doll.titoletto(null, "Letture");
+const lN = Doll.lettura(null, "atomi/cella");
+const lZ = Doll.lettura(null, "primi vicini $z$");
+const lD = Doll.lettura(null, "distanza $d_{nn}$");
+const lF = Doll.lettura(null, "impaccamento");
+const lP = Doll.lettura(null, "$d_{hkl}=a/\\sqrt{h^2+k^2+l^2}$");
+document.getElementById("bVista").onclick = () => inquadra(stato.N);
+const virgola = x => x.toFixed(3).replace(".", "{,}");
+
+function aggiornaLetture(pr, nSulPiano, nPiani) {
+  const R = RETICOLI[stato.ret], { h, k, l } = stato;
+  lN(`$${pr.formula}=${Math.round(pr.nCella)}$`);
+  lZ(`$${pr.z}$`);
+  lD(`$${R.dTeX}\\approx ${virgola(pr.dnn)}\\,a$`);
+  lF(`$${R.fTeX}\\approx ${virgola(pr.fp)}$`);
+  lP(h || k || l ? `$${virgola(1 / Math.hypot(h, k, l))}\\,a$` : "—");
+  document.getElementById("dati").innerHTML = `${R.nome}, cella cubica di lato $a$`;
+  Doll.tex(document.getElementById("dati"));
+}
+function aggiornaLegenda(pos) {
+  const tipi = [...new Set(pos.map(tipoSito))];
+  const el = document.getElementById("legenda");
+  el.innerHTML = tipi.map(t => `<div><i class="pallino" style="background:${COL_SITO[t]}"></i>${NOME_SITO[t]}</div>`).join("")
+    + (stato.piani !== "nessuno" && (stato.h || stato.k || stato.l)
+       ? `<div><i style="background:${C.viola};height:8px;opacity:.6"></i>piano $(${stato.h}\\,${stato.k}\\,${stato.l})$</div>` : "");
+  Doll.tex(el);
+}
+
+/* ============================ 6. PERCORSO GUIDATO ============================ */
+// imposta tutto lo stato in un colpo solo (una sola ricostruzione)
+function imposta(o, dir) {
+  Object.assign(stato, o); muto = true;
+  [[sRet, "ret"], [sMod, "modello"], [sPiani, "piani"]].forEach(([s, c]) => { s.el.value = stato[c]; });
+  [[sN, "N"], [sH, "h"], [sK, "k"], [sL, "l"]].forEach(([s, c]) => s.set(stato[c]));   // aggiorna anche il numero
+  muto = false; costruisci(); inquadra(stato.N, dir);
+}
+const base = { modello: "legami", N: 1, h: 1, k: 1, l: 1, piani: "nessuno" };
+// "Prova tu": d_hkl = a/sqrt(h²+k²+l²) (cella cubica) vale a/√5 ≈ 0,447 a  <=>  h²+k²+l² = 5,
+// cioe' le 6 permutazioni di (2 1 0) (enumerate con h, k, l in 0..2). Verifica: somma dei quadrati = 5,
+// piano visibile. (Non a/√2: nell'fcc 0,707 a e' anche d_nn e le due letture si confonderebbero.)
+const prova = Doll.bersaglio(null, { testo: "Mostra un piano $(hkl)$ con $d_{hkl}=a/\\sqrt5\\approx0{,}447\\,a$",
+  verifica: () => stato.piani !== "nessuno" && stato.h ** 2 + stato.k ** 2 + stato.l ** 2 === 5,
+  ok: "$(210)$ e simili: $h^2+k^2+l^2=5$, quindi $d=a/\\sqrt5$" });
+pan.prepend(prova.el);   // in cima al pannello
+// ogni passo: stato completo, e il bersaglio solo nell'ultimo
+const passo = (o, dir, provaTu = false) => () => { imposta(o, dir); prova.mostra(provaTu); };
+// prevedi -> osserva -> spiega: il passo 2 chiede i primi vicini del bcc (si vede ancora l'sc), il 3 li mostra
+Doll.guida([
+  { testo: "Cubico semplice: 1 atomo per cella, 6 primi vicini",        applica: passo({ ...base, ret: "sc" }) },
+  { testo: "Un atomo anche al centro del cubo: quanti primi vicini? Prevedi", applica: passo({ ...base, ret: "sc", N: 2 }) },
+  { testo: "Corpo centrato: 2 atomi per cella, 8 primi vicini",          applica: passo({ ...base, ret: "bcc" }) },
+  { testo: "Facce centrate: 4 atomi, 12 vicini, impaccamento $0{,}74$", applica: passo({ ...base, ret: "fcc", modello: "contatto" }) },
+  { testo: "Piano $(111)$ dell'fcc: triangolo di atomi compatto",       applica: passo({ ...base, ret: "fcc", piani: "uno" },
+                                                                           new THREE.Vector3(1.7, 1.0, 1.15).normalize()) },
+  { testo: "Prova tu: trova un piano con $d_{hkl}=a/\\sqrt5$",         applica: passo({ ...base, ret: "fcc", piani: "uno", h: 1, k: 0, l: 0 }, undefined, true) },
+]);
+Doll.pronto();
+</script>
+</body>
+</html>
